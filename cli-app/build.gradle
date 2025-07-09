@@ -1,5 +1,155 @@
-eclipse.project.name = 'j60870-cli-app'
+plugins {
+    id 'java-library'
+}
+
+java {
+    sourceCompatibility = JavaVersion.VERSION_11
+    targetCompatibility = JavaVersion.VERSION_11
+}
+
+repositories {
+    mavenCentral()
+}
+
 
 dependencies {
-    compile project(':')
+    implementation project(":")
+    
+    implementation 'com.fazecast:jSerialComm:[2.0.0,3.0.0)'
+    
+    implementation 'javax.xml.bind:jaxb-api:2.3.1'
+    implementation 'org.glassfish.jaxb:jaxb-runtime:2.3.1'
+}
+
+jar {
+    dependsOn project(':').jar
+    
+    manifest {
+        attributes(
+            'Main-Class': 'net.sympower.iec60870.app.iec104.SampleIEC104Server',
+            'Implementation-Title': 'IEC 60870 CLI Application',
+            'Implementation-Version': project.version
+        )
+    }
+    
+    from {
+        configurations.runtimeClasspath.collect { 
+            it.isDirectory() ? it : zipTree(it)
+        }
+    }
+    
+    exclude 'META-INF/versions/9/**'
+    exclude 'module-info.class'
+    duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+}
+
+task iec104ServerJar(type: Jar) {
+    dependsOn project(':').jar
+    archiveClassifier = 'iec104-server'
+    manifest {
+        attributes 'Main-Class': 'net.sympower.iec60870.app.iec104.SampleIEC104Server'
+    }
+    from sourceSets.main.output
+    from {
+        configurations.runtimeClasspath.collect { 
+            it.isDirectory() ? it : zipTree(it) 
+        }
+    }
+    exclude 'META-INF/versions/9/**'
+    exclude 'module-info.class'
+    duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+}
+
+task iec104ClientJar(type: Jar) {
+    dependsOn project(':').jar
+    archiveClassifier = 'tcp-client'
+    manifest {
+        attributes 'Main-Class': 'net.sympower.iec60870.app.iec104.SampleIEC104Client'
+    }
+    from sourceSets.main.output
+    from {
+        configurations.runtimeClasspath.collect { 
+            it.isDirectory() ? it : zipTree(it) 
+        }
+    }
+    exclude 'META-INF/versions/9/**'
+    exclude 'module-info.class'
+    duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+}
+
+task iec101ServerJar(type: Jar) {
+    dependsOn project(':').jar
+    archiveClassifier = 'serial-server'
+    manifest {
+        attributes 'Main-Class': 'net.sympower.iec60870.app.iec101.SampleIEC101Server'
+    }
+    from sourceSets.main.output
+    from {
+        configurations.runtimeClasspath.collect { 
+            it.isDirectory() ? it : zipTree(it) 
+        }
+    }
+    exclude 'META-INF/versions/9/**'
+    exclude 'module-info.class'
+    duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+}
+
+task iec101ClientJar(type: Jar) {
+    dependsOn project(':').jar
+    archiveClassifier = 'serial-client'
+    manifest {
+        attributes 'Main-Class': 'net.sympower.iec60870.app.iec101.SampleIEC101Client'
+    }
+    from sourceSets.main.output
+    from {
+        configurations.runtimeClasspath.collect { 
+            it.isDirectory() ? it : zipTree(it) 
+        }
+    }
+    exclude 'META-INF/versions/9/**'
+    exclude 'module-info.class'
+    duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+}
+
+task buildAllExecutables {
+    description = 'Build all executable JAR files'
+    group = 'build'
+    dependsOn iec104ServerJar, iec104ClientJar, iec101ServerJar, iec101ClientJar
+}
+
+build.dependsOn buildAllExecutables
+
+task runIec104Server(type: JavaExec) {
+    description = 'Run IEC 60870-5-104 TCP/IP server'
+    group = 'application'
+    classpath = sourceSets.main.runtimeClasspath
+    mainClass.set('net.sympower.iec60870.app.iec104.SampleIEC104Server')
+    standardInput = System.in
+}
+
+task runIec104Client(type: JavaExec) {
+    description = 'Run IEC 60870-5-104 TCP/IP client'
+    group = 'application'
+    classpath = sourceSets.main.runtimeClasspath
+    mainClass.set('net.sympower.iec60870.app.iec104.SampleIEC104Client')
+    standardInput = System.in
+    args = project.hasProperty('appArgs') ? project.appArgs.split(',') : []
+}
+
+task runIec101Server(type: JavaExec) {
+    description = 'Run IEC 60870-5-101 serial server'
+    group = 'application'
+    classpath = sourceSets.main.runtimeClasspath
+    mainClass.set('net.sympower.iec60870.app.iec101.SampleIEC101Server')
+    standardInput = System.in
+    args = project.hasProperty('appArgs') ? project.appArgs.split(',') : []
+}
+
+task runIec101Client(type: JavaExec) {
+    description = 'Run IEC 60870-5-101 serial client'
+    group = 'application'
+    classpath = sourceSets.main.runtimeClasspath
+    mainClass.set('net.sympower.iec60870.app.iec101.SampleIEC101Client')
+    standardInput = System.in
+    args = project.hasProperty('appArgs') ? project.appArgs.split(',') : []
 }
