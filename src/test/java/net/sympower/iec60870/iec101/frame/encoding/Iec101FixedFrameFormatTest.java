@@ -190,7 +190,7 @@ public class Iec101FixedFrameFormatTest {
             FunctionCode.RESET_REMOTE_LINK,
             FunctionCode.TEST_FUNCTION_LINK,
             FunctionCode.REQUEST_LINK_STATUS,
-            FunctionCode.STATUS_LINK_NO_DATA
+            FunctionCode.RESP_NACK_NO_DATA
         };
     }
 

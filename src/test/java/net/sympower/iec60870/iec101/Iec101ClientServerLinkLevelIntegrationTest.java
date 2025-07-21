@@ -610,7 +610,7 @@ public class Iec101ClientServerLinkLevelIntegrationTest {
         Iec101FixedFrame fixedFrame = (Iec101FixedFrame) frame;
         assertFalse("STATUS_LINK_NO_DATA frame should be from secondary station", fixedFrame.getPrm());
         assertEquals("Frame should be STATUS_LINK_NO_DATA", 
-                     Iec101Frame.FunctionCode.STATUS_LINK_NO_DATA, fixedFrame.getFunctionCode());
+                     Iec101Frame.FunctionCode.RESP_NACK_NO_DATA, fixedFrame.getFunctionCode());
         assertEquals("STATUS_LINK_NO_DATA frame should use configured link address", 
                      LINK_ADDRESS, fixedFrame.getLinkAddress());
     }

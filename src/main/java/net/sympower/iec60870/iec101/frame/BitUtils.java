@@ -145,4 +145,59 @@ public final class BitUtils {
         }
         return result.toString().trim();
     }
+    
+    /**
+     * Reads a multi-byte value from a byte array in little-endian format.
+     * <p>
+     * Reads the specified number of bytes starting at the given offset and combines
+     * them into a single integer value with the least significant byte first.
+     * <p>
+     * Example: readBytes(new byte[]{0x34, 0x12, 0x56}, 0, 2) returns 0x1234
+     * - First byte (0x34) is LSB
+     * - Second byte (0x12) is MSB
+     * - Result: 0x34 | (0x12 << 8) = 0x1234
+     * 
+     * @param buffer the byte array to read from
+     * @param offset the starting position in the buffer
+     * @param byteLength the number of bytes to read (1-4)
+     * @return the multi-byte value as an integer
+     * @throws IllegalArgumentException if byteLength is not between 1 and 4
+     */
+    public static int readBytes(byte[] buffer, int offset, int byteLength) {
+        if (byteLength < 1 || byteLength > 4) {
+            throw new IllegalArgumentException("Byte length must be between 1 and 4");
+        }
+        
+        int value = 0;
+        for (int i = 0; i < byteLength; i++) {
+            value |= (toUnsigned(buffer[offset + i]) << (8 * i)); // LSB first
+        }
+        return value;
+    }
+    
+    /**
+     * Writes a multi-byte value to a byte array in little-endian format.
+     * <p>
+     * Writes the specified number of bytes starting at the given offset, with the
+     * least significant byte first.
+     * <p>
+     * Example: writeBytes(buffer, 0, 0x1234, 2) writes [0x34, 0x12]
+     * - First byte: 0x1234 & 0xFF = 0x34 (LSB)
+     * - Second byte: (0x1234 >> 8) & 0xFF = 0x12 (MSB)
+     * 
+     * @param buffer the byte array to write to
+     * @param offset the starting position in the buffer
+     * @param value the value to write
+     * @param byteLength the number of bytes to write (1-4)
+     * @throws IllegalArgumentException if byteLength is not between 1 and 4
+     */
+    public static void writeBytes(byte[] buffer, int offset, int value, int byteLength) {
+        if (byteLength < 1 || byteLength > 4) {
+            throw new IllegalArgumentException("Byte length must be between 1 and 4");
+        }
+        
+        for (int i = 0; i < byteLength; i++) {
+            buffer[offset + i] = (byte) ((value >> (8 * i)) & 0xFF); // LSB first
+        }
+    }
 }

@@ -38,6 +38,8 @@ import org.slf4j.LoggerFactory;
 import java.io.DataInputStream;
 import java.io.DataOutputStream;
 import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -50,6 +52,7 @@ public class Iec101ServerConnection extends IEC60870Connection {
     public static final boolean FCV_CLEAR = false;
     public static final boolean FCB_CLEAR = false;
     public static final boolean ACD_CLEAR = false;
+    public static final boolean ACD_SET = true;
     public static final boolean DFC_CLEAR = false;
 
     private static final int MAX_FRAME_SIZE = 255;
@@ -61,8 +64,8 @@ public class Iec101ServerConnection extends IEC60870Connection {
     private final Map<Integer, Boolean> expectedFcbPerLink = new ConcurrentHashMap<>();
 
     public Iec101ServerConnection(
-        DataInputStream inputStream, DataOutputStream outputStream,
-        IEC60870Settings settings, int linkAddress
+            InputStream inputStream, OutputStream outputStream,
+            IEC60870Settings settings, int linkAddress
     ) {
         super(inputStream, outputStream, settings);
         this.linkAddress = linkAddress;
@@ -83,8 +86,8 @@ public class Iec101ServerConnection extends IEC60870Connection {
         if (listener != null) {
             listener.onConnectionReady();
         }
-        
-        logger.info("IEC-101 server connection ready for data transfer");
+
+        System.out.println("IEC-101 server connection ready for data transfer");
     }
 
     @Override
@@ -120,8 +123,8 @@ public class Iec101ServerConnection extends IEC60870Connection {
         if (closed.getAndSet(true)) {
             return;
         }
-        
-        logger.info("Closing IEC-101 server connection");
+
+        System.out.println("Closing IEC-101 server connection");
         dataTransferStarted.set(false);
         linkLayerActive.set(false);
         executor.shutdown();
@@ -164,7 +167,7 @@ public class Iec101ServerConnection extends IEC60870Connection {
             }
             catch (Exception e) {
                 if (!closed.get()) {
-                    logger.info("IEC-101 server connection lost: {}", e.getMessage());
+                    System.out.println("IEC-101 server connection lost: " + e.getMessage());
                     close();
                     if (eventListener != null) {
                         eventListener.onConnectionLost(e instanceof IOException ? (IOException) e : new IOException(e));
@@ -176,7 +179,7 @@ public class Iec101ServerConnection extends IEC60870Connection {
     }
 
     private void handleFrame(Iec101Frame frame) {
-        logger.debug("Received {} frame", frame.getFrameType());
+        System.out.println("Received " +frame.getFrameType() + " frame");
             
         try {
             switch (frame.getFrameType()) {
@@ -195,6 +198,7 @@ public class Iec101ServerConnection extends IEC60870Connection {
     }
 
     private void handleFixedFrame(Iec101FixedFrame frame) {
+        System.out.println("Received function code " + frame.getFunctionCode());
         switch (frame.getFunctionCode()) {
             case RESET_REMOTE_LINK:
                 handleResetRemoteLink(frame);
@@ -202,7 +206,7 @@ public class Iec101ServerConnection extends IEC60870Connection {
             case TEST_FUNCTION_LINK:
             case REQUEST_CLASS_1_DATA: // Proper REQUEST_CLASS_DATA handling not supported.
             case REQUEST_CLASS_2_DATA:
-                sendSingleCharFrame(Iec101Frame.ACK);
+                sendRespNackNoData();
                 break;
             case REQUEST_LINK_STATUS:
                 handleLinkStatusRequest();
@@ -235,7 +239,7 @@ public class Iec101ServerConnection extends IEC60870Connection {
     }
 
     private void handleAsdu(ASdu asdu) {
-        logger.debug("Received ASDU: {}", asdu);
+        System.out.println("Received ASDU: " + asdu);
         if (eventListener != null) {
             eventListener.onAsduReceived(asdu);
         }
@@ -246,8 +250,8 @@ public class Iec101ServerConnection extends IEC60870Connection {
         expectedFcbPerLink.remove(remoteLinkAddress);
         sendSingleCharFrame(Iec101Frame.ACK);
         linkLayerActive.set(true);
-        
-        logger.info("Remote link reset processed for address {}", remoteLinkAddress);
+
+        System.out.println("Remote link reset processed for address " + remoteLinkAddress);
         
         if (eventListener != null && !dataTransferStarted.get()) {
             dataTransferStarted.set(true);
@@ -256,21 +260,14 @@ public class Iec101ServerConnection extends IEC60870Connection {
     }
 
     private void handleLinkStatusRequest() {
-        try {
             sendLinkStatus();
-        } catch (IOException e) {
-            close();
-            if (eventListener != null) {
-                eventListener.onConnectionLost(e);
-            }
-        }
     }
 
 
     private Iec101VariableFrame createVariableFrame(ASdu asdu) {
         return new Iec101VariableFrame(
             linkAddress,
-            FunctionCode.USER_DATA_NO_REPLY, // Only unbalance mode is supported, server should not receive ACKs or NACKs
+            FunctionCode.USER_DATA_RESPONSE, // Only unbalance mode is supported, server should not receive ACKs or NACKs
             SECONDARY_STATION,
             FCV_CLEAR, // FCV is not set on server frames
             FCB_CLEAR, // FCB is not set on server frames
@@ -280,10 +277,11 @@ public class Iec101ServerConnection extends IEC60870Connection {
         );
     }
 
-    private void sendVariableFrame(Iec101VariableFrame frame) throws IOException {
+    // TODO we left it with successfully connecting and responding to ASDU-s, now we need to
+    // clean up, and make sure the library supports different address lengths properly.
+    private void sendVariableFrame(Iec101VariableFrame frame) {
         byte[] frameData = encodeVariableFrame(frame);
-        logger.debug("Sending variable frame with ASDU: {}", frame.getAsdu());
-        logger.debug("Variable frame encoded as: {}", BitUtils.bytesToHex(frameData));
+        System.out.println("Sending variable frame with ASDU: " + frame.getAsdu());
         sendRawFrame(frameData);
     }
     
@@ -295,32 +293,44 @@ public class Iec101ServerConnection extends IEC60870Connection {
         return frameData;
     }
 
-    private void sendRawFrame(byte[] frameData) throws IOException {
-        synchronized (outputStream) {
-            outputStream.write(frameData);
-            outputStream.flush();
+    private void sendRawFrame(byte[] frameData) {
+        try {
+            synchronized (outputStream) {
+                System.out.println("sending raw frame as bytes " + BitUtils.bytesToHex(frameData));
+                outputStream.write(frameData);
+                outputStream.flush();
+
+                applyInterFrameDelay();
+            }
+        } catch (IOException | InterruptedException e) {
+            close();
+            if (eventListener != null && e instanceof IOException) {
+                eventListener.onConnectionLost((IOException) e);
+            }
         }
     }
 
     private void sendSingleCharFrame(byte character) {
-        logger.debug("Sending single character: {}", character);
+        System.out.println("Sending single character: " + character);
             
         try {
             synchronized (outputStream) {
                 outputStream.write(character);
                 outputStream.flush();
+
+                applyInterFrameDelay();
             }
-        } catch (IOException e) {
+        } catch (IOException | InterruptedException e) {
             close();
             if (eventListener != null) {
-                eventListener.onConnectionLost(e);
+                eventListener.onConnectionLost((IOException) e);
             }
         }
     }
 
-    private void sendLinkStatus() throws IOException {
+    private void sendLinkStatus() {
         FunctionCode statusCode =
-            ACD_CLEAR ? FunctionCode.STATUS_LINK_ACCESS_DEMAND : FunctionCode.STATUS_LINK_NO_DATA; // Proper Access Demand not supported
+            ACD_CLEAR ? FunctionCode.STATUS_LINK_ACCESS_DEMAND : FunctionCode.STATUS_LINK; // Proper Access Demand not supported
             
         Iec101FixedFrame statusFrame = new Iec101FixedFrame(
             linkAddress,
@@ -335,11 +345,37 @@ public class Iec101ServerConnection extends IEC60870Connection {
         sendFixedFrame(statusFrame);
     }
 
-    private void sendFixedFrame(Iec101FixedFrame frame) throws IOException {
+    private void sendRespNackNoData() {
+            Iec101FixedFrame statusFrame = new Iec101FixedFrame(
+                    linkAddress,
+                    FunctionCode.RESP_NACK_NO_DATA,
+                    SECONDARY_STATION,
+                    FCV_CLEAR, // FCV is not set on server frames
+                    FCB_CLEAR, // FCB is not set on server frames
+                    ACD_CLEAR, // Proper Access Demand handling not supported
+                    DFC_CLEAR // Proper Data Flow Control handling not supported
+            );
+
+        sendFixedFrame(statusFrame);
+    }
+
+    private void sendFixedFrame(Iec101FixedFrame frame) {
         byte[] frameData = encodeFixedFrame(frame);
-        logger.debug("Sending fixed frame: {}", frame.getFunctionCode());
-        logger.debug("Fixed frame encoded as: {}", BitUtils.bytesToHex(frameData));
+        System.out.println("Sending fixed frame: " + frame.getFunctionCode());
         sendRawFrame(frameData);
+    }
+    
+    private void applyInterFrameDelay() throws InterruptedException {
+        int delayMs = settings.getInterFrameDelayMs();
+        if (delayMs > 0) {
+            Thread.sleep(delayMs);
+        } else {
+            // Calculate minimum delay based on standard baud rate
+            int baudRate = 9600; // Standard IEC-101 baud rate
+            int characterTimeMs = (int) ((1000.0 * 11) / baudRate); // 11 bits per character (start + 8 data + parity + stop)
+            int minDelay = Math.max(4 * characterTimeMs, 10); // Minimum 4 character times or 10ms
+            Thread.sleep(minDelay);
+        }
     }
     
     private byte[] encodeFixedFrame(Iec101FixedFrame frame) {

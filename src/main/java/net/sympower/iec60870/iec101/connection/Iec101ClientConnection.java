@@ -39,6 +39,8 @@ import org.slf4j.LoggerFactory;
 import java.io.DataInputStream;
 import java.io.DataOutputStream;
 import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CountDownLatch;
@@ -88,8 +90,8 @@ public class Iec101ClientConnection extends IEC60870Connection {
     }
 
 
-    public Iec101ClientConnection(DataInputStream inputStream, DataOutputStream outputStream, 
-                                 IEC60870Settings settings, int linkAddress, Iec101ClientSettings clientSettings) {
+    public Iec101ClientConnection(InputStream inputStream, OutputStream outputStream,
+                                  IEC60870Settings settings, int linkAddress, Iec101ClientSettings clientSettings) {
         super(inputStream, outputStream, settings);
         this.linkAddress = linkAddress;
         this.clientSettings = clientSettings;
@@ -322,7 +324,7 @@ public class Iec101ClientConnection extends IEC60870Connection {
     private void handleFixedFrame(Iec101FixedFrame frame) {
         switch (frame.getFunctionCode()) {
             case STATUS_LINK_ACCESS_DEMAND:
-            case STATUS_LINK_NO_DATA:
+            case RESP_NACK_NO_DATA:
                 notifyHandshakeEvent(() -> linkStatusReceived = true);
                 break;
             case RESET_REMOTE_LINK:
@@ -397,6 +399,26 @@ public class Iec101ClientConnection extends IEC60870Connection {
         synchronized (outputStream) {
             outputStream.write(frameData);
             outputStream.flush();
+            
+            try {
+                applyInterFrameDelay();
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new IOException("Inter-frame delay interrupted", e);
+            }
+        }
+    }
+    
+    private void applyInterFrameDelay() throws InterruptedException {
+        int delayMs = settings.getInterFrameDelayMs();
+        if (delayMs > 0) {
+            Thread.sleep(delayMs);
+        } else {
+            // Calculate minimum delay based on standard baud rate
+            int baudRate = 9600; // Standard IEC-101 baud rate
+            int characterTimeMs = (int) ((1000.0 * 11) / baudRate); // 11 bits per character (start + 8 data + parity + stop)
+            int minDelay = Math.max(4 * characterTimeMs, 10); // Minimum 4 character times or 10ms
+            Thread.sleep(minDelay);
         }
     }
 

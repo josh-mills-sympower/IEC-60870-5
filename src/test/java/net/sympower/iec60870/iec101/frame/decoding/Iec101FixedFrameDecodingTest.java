@@ -112,7 +112,7 @@ public class Iec101FixedFrameDecodingTest {
             FunctionCode.ACK_CONFIRM,
             FunctionCode.NACK_MESSAGE,
             FunctionCode.STATUS_LINK_ACCESS_DEMAND,
-            FunctionCode.STATUS_LINK_NO_DATA,
+            FunctionCode.RESP_NACK_NO_DATA,
             FunctionCode.NACK_NOT_FUNCTIONING,
             FunctionCode.NACK_NOT_IMPLEMENTED
         };

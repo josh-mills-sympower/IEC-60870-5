@@ -52,6 +52,8 @@ import net.sympower.iec60870.common.elements.InformationElement;
 import java.io.DataInputStream;
 import java.io.DataOutputStream;
 import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
 import java.util.Collection;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -59,8 +61,8 @@ import java.util.concurrent.atomic.AtomicBoolean;
 
 public abstract class IEC60870Connection {
 
-    protected final DataInputStream inputStream;
-    protected final DataOutputStream outputStream;
+    protected final InputStream inputStream;
+    protected final OutputStream outputStream;
     protected final IEC60870Settings settings;
     protected final ExecutorService executor;
     protected final AtomicBoolean closed = new AtomicBoolean(false);
@@ -69,7 +71,7 @@ public abstract class IEC60870Connection {
     protected volatile IEC60870EventListener eventListener;
     protected int originatorAddress = 0;
 
-    public IEC60870Connection(DataInputStream inputStream, DataOutputStream outputStream, IEC60870Settings settings) {
+    public IEC60870Connection(InputStream inputStream, OutputStream outputStream, IEC60870Settings settings) {
         this.inputStream = inputStream;
         this.outputStream = outputStream;
         this.settings = settings;

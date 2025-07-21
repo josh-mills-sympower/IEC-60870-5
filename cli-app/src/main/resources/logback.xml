@@ -8,10 +8,10 @@
     </appender>
 
     <!-- Set logging levels -->
-    <logger name="net.sympower.iec60870" level="INFO"/>
+    <logger name="net.sympower.iec60870" level="DEBUG"/>
     
     <!-- Root logger -->
-    <root level="INFO">
+    <root level="DEBUG">
         <appender-ref ref="CONSOLE"/>
     </root>
 </configuration>
