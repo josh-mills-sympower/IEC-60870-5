@@ -88,8 +88,8 @@ public class Iec101ClientConnection extends IEC60870Connection {
     }
 
 
-    public Iec101ClientConnection(DataInputStream inputStream, DataOutputStream outputStream, 
-                                 IEC60870Settings settings, int linkAddress, Iec101ClientSettings clientSettings) {
+    public Iec101ClientConnection(DataInputStream inputStream, DataOutputStream outputStream,
+        IEC60870Settings settings, int linkAddress, Iec101ClientSettings clientSettings) {
         super(inputStream, outputStream, settings);
         this.linkAddress = linkAddress;
         this.clientSettings = clientSettings;
@@ -321,8 +321,9 @@ public class Iec101ClientConnection extends IEC60870Connection {
 
     private void handleFixedFrame(Iec101FixedFrame frame) {
         switch (frame.getFunctionCode()) {
+            case STATUS_LINK:
             case STATUS_LINK_ACCESS_DEMAND:
-            case STATUS_LINK_NO_DATA:
+            case RESP_NACK_NO_DATA:
                 notifyHandshakeEvent(() -> linkStatusReceived = true);
                 break;
             case RESET_REMOTE_LINK:
@@ -397,7 +398,18 @@ public class Iec101ClientConnection extends IEC60870Connection {
         synchronized (outputStream) {
             outputStream.write(frameData);
             outputStream.flush();
+            
+            try {
+                applyInterFrameDelay();
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new IOException("Inter-frame delay interrupted", e);
+            }
         }
+    }
+
+    private void applyInterFrameDelay() throws InterruptedException {
+        Thread.sleep(settings.getInterFrameDelayMs());
     }
 
     private boolean sendVariableFrameWithRetries(Iec101VariableFrame frame, boolean fcbValue) throws IOException {
@@ -430,7 +442,7 @@ public class Iec101ClientConnection extends IEC60870Connection {
         }
     }
 
-    private void sendFixedFrame(Iec101FixedFrame frame) throws IOException {
+    public void sendFixedFrame(Iec101FixedFrame frame) throws IOException {
         byte[] frameData = encodeFixedFrame(frame);
         logger.debug("Sending fixed frame: {}", frame.getFunctionCode());
         logger.debug("Fixed frame encoded as: {}", BitUtils.bytesToHex(frameData));

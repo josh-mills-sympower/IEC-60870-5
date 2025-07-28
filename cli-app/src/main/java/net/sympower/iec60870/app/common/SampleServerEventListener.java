@@ -16,8 +16,8 @@ import net.sympower.iec60870.common.api.IEC60870Connection;
 import net.sympower.iec60870.common.api.IEC60870EventListener;
 import net.sympower.iec60870.common.elements.IeBinaryCounterReading;
 import net.sympower.iec60870.common.elements.IeNormalizedValue;
+import net.sympower.iec60870.common.elements.IeQualifierOfInterrogation;
 import net.sympower.iec60870.common.elements.IeQuality;
-import net.sympower.iec60870.common.elements.IeScaledValue;
 import net.sympower.iec60870.common.elements.IeSingleCommand;
 import net.sympower.iec60870.common.elements.IeTime56;
 import net.sympower.iec60870.common.elements.InformationElement;
@@ -76,18 +76,16 @@ public class SampleServerEventListener implements IEC60870EventListener {
     }
 
     private void handleInterrogation(ASdu asdu) throws IOException {
-        System.out.println("Got interrogation command (C_IC_NA_1). Will send scaled measured values.");
+        System.out.println("Got interrogation command (C_IC_NA_1). Will send Interrogation Confirmation.");
         
         connection.sendConfirmation(asdu);
         connection.send(new ASdu(
-            ASduType.M_ME_NB_1, true, CauseOfTransmission.INTERROGATED_BY_STATION, false,
+            ASduType.C_IC_NA_1, true, CauseOfTransmission.ACTIVATION_CON, false,
             false, 0, asdu.getCommonAddress(),
             new InformationObject(1, new InformationElement[][] {
-                                     { new IeScaledValue(-32768), new IeQuality(true, true, true, true, true) },
-                                     { new IeScaledValue(10), new IeQuality(true, true, true, true, true) },
-                                     { new IeScaledValue(-5), new IeQuality(true, true, true, true, true) } })));
-        
-        System.out.println("Sent measured values response");
+                            { new IeQualifierOfInterrogation(20)}
+                    })
+        ));
     }
 
     private void handleSingleCommand(ASdu asdu) throws IOException {

@@ -23,23 +23,46 @@
  */
 package net.sympower.iec60870.iec101.frame.decoding;
 
-import org.junit.Test;
 import net.sympower.iec60870.common.ASdu;
 import net.sympower.iec60870.common.ASduType;
 import net.sympower.iec60870.common.IEC60870Settings;
 import net.sympower.iec60870.common.elements.InformationObject;
+import net.sympower.iec60870.iec101.frame.BitUtils;
 import net.sympower.iec60870.iec101.frame.Iec101Frame.FunctionCode;
 import net.sympower.iec60870.iec101.frame.Iec101VariableFrame;
+import org.junit.Test;
 
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
 
+import static net.sympower.iec60870.iec101.frame.Iec101FrameTestUtils.ACD_CLEAR;
+import static net.sympower.iec60870.iec101.frame.Iec101FrameTestUtils.BYTE_TO_UNSIGNED_MASK;
+import static net.sympower.iec60870.iec101.frame.Iec101FrameTestUtils.DEFAULT_COMMON_ADDRESS;
+import static net.sympower.iec60870.iec101.frame.Iec101FrameTestUtils.DEFAULT_ORIGINATOR_ADDRESS;
+import static net.sympower.iec60870.iec101.frame.Iec101FrameTestUtils.DEFAULT_SETTINGS;
+import static net.sympower.iec60870.iec101.frame.Iec101FrameTestUtils.DFC_SET;
+import static net.sympower.iec60870.iec101.frame.Iec101FrameTestUtils.END_FRAME;
+import static net.sympower.iec60870.iec101.frame.Iec101FrameTestUtils.FCB_ACD_BIT_MASK;
+import static net.sympower.iec60870.iec101.frame.Iec101FrameTestUtils.FCB_ACD_BIT_POS;
+import static net.sympower.iec60870.iec101.frame.Iec101FrameTestUtils.FCB_SET;
+import static net.sympower.iec60870.iec101.frame.Iec101FrameTestUtils.FCV_DFC_BIT_MASK;
+import static net.sympower.iec60870.iec101.frame.Iec101FrameTestUtils.FCV_DFC_BIT_POS;
+import static net.sympower.iec60870.iec101.frame.Iec101FrameTestUtils.FCV_DISABLED;
+import static net.sympower.iec60870.iec101.frame.Iec101FrameTestUtils.FUNCTION_CODE_MASK;
+import static net.sympower.iec60870.iec101.frame.Iec101FrameTestUtils.PRM_BIT_MASK;
+import static net.sympower.iec60870.iec101.frame.Iec101FrameTestUtils.PRM_BIT_POS;
+import static net.sympower.iec60870.iec101.frame.Iec101FrameTestUtils.QOI_STATION_INTERROGATION;
+import static net.sympower.iec60870.iec101.frame.Iec101FrameTestUtils.START_VARIABLE_FRAME;
+import static net.sympower.iec60870.iec101.frame.Iec101FrameTestUtils.TEST_ADDRESS_3;
+import static net.sympower.iec60870.iec101.frame.Iec101FrameTestUtils.TEST_ADDRESS_4;
+import static net.sympower.iec60870.iec101.frame.Iec101FrameTestUtils.VARIABLE_FRAME_ASDU_START_POSITION;
+import static net.sympower.iec60870.iec101.frame.Iec101FrameTestUtils.VARIABLE_FRAME_CONTROL_BYTE_POSITION;
+import static net.sympower.iec60870.iec101.frame.Iec101FrameTestUtils.getBit;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
-import static net.sympower.iec60870.iec101.frame.Iec101FrameTestUtils.*;
 
 public class Iec101VariableFrameDecodingTest {
 
@@ -122,27 +145,35 @@ public class Iec101VariableFrameDecodingTest {
         };
         
         // Calculate frame length (control + address + ASDU + checksum)
-        byte length = (byte) (3 + asduBytes.length);
+        int addressLength = SETTINGS.getLinkAddressLength();
+        byte length = (byte) (1 + addressLength + asduBytes.length + 1);
         
         // Control field: PRM=1 + FCB/FCV + function code
         byte control = (byte) (PRM_BIT_MASK | (fcb ? FCB_ACD_BIT_MASK : 0) | (fcv ? FCV_DFC_BIT_MASK : 0) | FunctionCode.USER_DATA_CONFIRMED.getCode());
         
+        // Prepare address bytes
+        byte[] addressBytes = new byte[addressLength];
+        BitUtils.writeBytes(addressBytes, 0, address, addressLength);
+        
         // Calculate checksum
         int checksum = control & BYTE_TO_UNSIGNED_MASK;
-        checksum += address & BYTE_TO_UNSIGNED_MASK;
+        for (byte b : addressBytes) {
+            checksum += b & BYTE_TO_UNSIGNED_MASK;
+        }
         for (byte b : asduBytes) {
             checksum += b & BYTE_TO_UNSIGNED_MASK;
         }
         
         // Build complete frame: START + L + L + START + control + address + ASDU + checksum + END
-        byte[] frame = new byte[6 + asduBytes.length + 2];
+        byte[] frame = new byte[4 + 1 + addressLength + asduBytes.length + 1 + 1];
         int pos = 0;
         frame[pos++] = START_VARIABLE_FRAME;
         frame[pos++] = length;
         frame[pos++] = length;
         frame[pos++] = START_VARIABLE_FRAME;
         frame[pos++] = control;
-        frame[pos++] = (byte) address;
+        System.arraycopy(addressBytes, 0, frame, pos, addressLength);
+        pos += addressLength;
         System.arraycopy(asduBytes, 0, frame, pos, asduBytes.length);
         pos += asduBytes.length;
         frame[pos++] = (byte) (checksum & BYTE_TO_UNSIGNED_MASK);
@@ -166,27 +197,35 @@ public class Iec101VariableFrameDecodingTest {
         };
         
         // Calculate frame length (control + address + ASDU + checksum)
-        byte length = (byte) (3 + asduBytes.length);
+        int addressLength = SETTINGS.getLinkAddressLength();
+        byte length = (byte) (1 + addressLength + asduBytes.length + 1);
         
         // Control field: PRM=0 + ACD/DFC + function code
         byte control = (byte) ((acd ? FCB_ACD_BIT_MASK : 0) | (dfc ? FCV_DFC_BIT_MASK : 0) | FunctionCode.USER_DATA_NO_REPLY.getCode());
         
+        // Prepare address bytes
+        byte[] addressBytes = new byte[addressLength];
+        BitUtils.writeBytes(addressBytes, 0, address, addressLength);
+        
         // Calculate checksum
         int checksum = control & BYTE_TO_UNSIGNED_MASK;
-        checksum += address & BYTE_TO_UNSIGNED_MASK;
+        for (byte b : addressBytes) {
+            checksum += b & BYTE_TO_UNSIGNED_MASK;
+        }
         for (byte b : asduBytes) {
             checksum += b & BYTE_TO_UNSIGNED_MASK;
         }
         
         // Build complete frame: START + L + L + START + control + address + ASDU + checksum + END
-        byte[] frame = new byte[6 + asduBytes.length + 2];
+        byte[] frame = new byte[4 + 1 + addressLength + asduBytes.length + 1 + 1];
         int pos = 0;
         frame[pos++] = START_VARIABLE_FRAME;
         frame[pos++] = length;
         frame[pos++] = length;
         frame[pos++] = START_VARIABLE_FRAME;
         frame[pos++] = control;
-        frame[pos++] = (byte) address;
+        System.arraycopy(addressBytes, 0, frame, pos, addressLength);
+        pos += addressLength;
         System.arraycopy(asduBytes, 0, frame, pos, asduBytes.length);
         pos += asduBytes.length;
         frame[pos++] = (byte) (checksum & BYTE_TO_UNSIGNED_MASK);
@@ -226,7 +265,11 @@ public class Iec101VariableFrameDecodingTest {
     }
 
     private static void thenDecodedFrameHasCorrectLinkAddress(Iec101VariableFrame decodedFrame, byte[] originalFrameBytes) {
-        int expectedAddress = getUnsignedByte(originalFrameBytes, VARIABLE_FRAME_ADDRESS_BYTE_POSITION);
+        // Extract address from frame based on address length
+        int addressLength = SETTINGS.getLinkAddressLength();
+        byte[] addressBytes = new byte[addressLength];
+        System.arraycopy(originalFrameBytes, 5, addressBytes, 0, addressLength); // Address starts at position 5 in variable frame
+        int expectedAddress = BitUtils.readBytes(addressBytes, 0, addressLength);
         assertEquals("Decoded link address should match original frame", expectedAddress, decodedFrame.getLinkAddress());
     }
 

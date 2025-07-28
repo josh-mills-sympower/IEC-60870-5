@@ -83,7 +83,7 @@ public class Iec101ServerConnection extends IEC60870Connection {
         if (listener != null) {
             listener.onConnectionReady();
         }
-        
+
         logger.info("IEC-101 server connection ready for data transfer");
     }
 
@@ -120,7 +120,7 @@ public class Iec101ServerConnection extends IEC60870Connection {
         if (closed.getAndSet(true)) {
             return;
         }
-        
+
         logger.info("Closing IEC-101 server connection");
         dataTransferStarted.set(false);
         linkLayerActive.set(false);
@@ -195,6 +195,7 @@ public class Iec101ServerConnection extends IEC60870Connection {
     }
 
     private void handleFixedFrame(Iec101FixedFrame frame) {
+        logger.debug("Received function code {}", frame.getFunctionCode());
         switch (frame.getFunctionCode()) {
             case RESET_REMOTE_LINK:
                 handleResetRemoteLink(frame);
@@ -202,7 +203,7 @@ public class Iec101ServerConnection extends IEC60870Connection {
             case TEST_FUNCTION_LINK:
             case REQUEST_CLASS_1_DATA: // Proper REQUEST_CLASS_DATA handling not supported.
             case REQUEST_CLASS_2_DATA:
-                sendSingleCharFrame(Iec101Frame.ACK);
+                sendRespNackNoData();
                 break;
             case REQUEST_LINK_STATUS:
                 handleLinkStatusRequest();
@@ -246,7 +247,7 @@ public class Iec101ServerConnection extends IEC60870Connection {
         expectedFcbPerLink.remove(remoteLinkAddress);
         sendSingleCharFrame(Iec101Frame.ACK);
         linkLayerActive.set(true);
-        
+
         logger.info("Remote link reset processed for address {}", remoteLinkAddress);
         
         if (eventListener != null && !dataTransferStarted.get()) {
@@ -256,21 +257,14 @@ public class Iec101ServerConnection extends IEC60870Connection {
     }
 
     private void handleLinkStatusRequest() {
-        try {
             sendLinkStatus();
-        } catch (IOException e) {
-            close();
-            if (eventListener != null) {
-                eventListener.onConnectionLost(e);
-            }
-        }
     }
 
 
     private Iec101VariableFrame createVariableFrame(ASdu asdu) {
         return new Iec101VariableFrame(
             linkAddress,
-            FunctionCode.USER_DATA_NO_REPLY, // Only unbalance mode is supported, server should not receive ACKs or NACKs
+            FunctionCode.USER_DATA_RESPONSE, // Only unbalance mode is supported, server should not receive ACKs or NACKs
             SECONDARY_STATION,
             FCV_CLEAR, // FCV is not set on server frames
             FCB_CLEAR, // FCB is not set on server frames
@@ -280,10 +274,9 @@ public class Iec101ServerConnection extends IEC60870Connection {
         );
     }
 
-    private void sendVariableFrame(Iec101VariableFrame frame) throws IOException {
+    private void sendVariableFrame(Iec101VariableFrame frame) {
         byte[] frameData = encodeVariableFrame(frame);
         logger.debug("Sending variable frame with ASDU: {}", frame.getAsdu());
-        logger.debug("Variable frame encoded as: {}", BitUtils.bytesToHex(frameData));
         sendRawFrame(frameData);
     }
     
@@ -295,10 +288,20 @@ public class Iec101ServerConnection extends IEC60870Connection {
         return frameData;
     }
 
-    private void sendRawFrame(byte[] frameData) throws IOException {
-        synchronized (outputStream) {
-            outputStream.write(frameData);
-            outputStream.flush();
+    private void sendRawFrame(byte[] frameData) {
+        try {
+            synchronized (outputStream) {
+                logger.debug("Sending raw frame as bytes: {}", BitUtils.bytesToHex(frameData));
+                outputStream.write(frameData);
+                outputStream.flush();
+
+                applyInterFrameDelay();
+            }
+        } catch (IOException | InterruptedException e) {
+            close();
+            if (eventListener != null && e instanceof IOException) {
+                eventListener.onConnectionLost((IOException) e);
+            }
         }
     }
 
@@ -309,18 +312,20 @@ public class Iec101ServerConnection extends IEC60870Connection {
             synchronized (outputStream) {
                 outputStream.write(character);
                 outputStream.flush();
+
+                applyInterFrameDelay();
             }
-        } catch (IOException e) {
+        } catch (IOException | InterruptedException e) {
             close();
             if (eventListener != null) {
-                eventListener.onConnectionLost(e);
+                eventListener.onConnectionLost((IOException) e);
             }
         }
     }
 
-    private void sendLinkStatus() throws IOException {
+    private void sendLinkStatus() {
         FunctionCode statusCode =
-            ACD_CLEAR ? FunctionCode.STATUS_LINK_ACCESS_DEMAND : FunctionCode.STATUS_LINK_NO_DATA; // Proper Access Demand not supported
+            ACD_CLEAR ? FunctionCode.STATUS_LINK_ACCESS_DEMAND : FunctionCode.STATUS_LINK; // Proper Access Demand not supported
             
         Iec101FixedFrame statusFrame = new Iec101FixedFrame(
             linkAddress,
@@ -335,11 +340,28 @@ public class Iec101ServerConnection extends IEC60870Connection {
         sendFixedFrame(statusFrame);
     }
 
-    private void sendFixedFrame(Iec101FixedFrame frame) throws IOException {
+    private void sendRespNackNoData() {
+            Iec101FixedFrame statusFrame = new Iec101FixedFrame(
+                    linkAddress,
+                    FunctionCode.RESP_NACK_NO_DATA,
+                    SECONDARY_STATION,
+                    FCV_CLEAR, // FCV is not set on server frames
+                    FCB_CLEAR, // FCB is not set on server frames
+                    ACD_CLEAR, // Proper Access Demand handling not supported
+                    DFC_CLEAR // Proper Data Flow Control handling not supported
+            );
+
+        sendFixedFrame(statusFrame);
+    }
+
+    private void sendFixedFrame(Iec101FixedFrame frame) {
         byte[] frameData = encodeFixedFrame(frame);
         logger.debug("Sending fixed frame: {}", frame.getFunctionCode());
-        logger.debug("Fixed frame encoded as: {}", BitUtils.bytesToHex(frameData));
         sendRawFrame(frameData);
+    }
+
+    private void applyInterFrameDelay() throws InterruptedException {
+        Thread.sleep(settings.getInterFrameDelayMs());
     }
     
     private byte[] encodeFixedFrame(Iec101FixedFrame frame) {

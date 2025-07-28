@@ -23,8 +23,6 @@
  */
 package net.sympower.iec60870.iec101;
 
-import org.junit.After;
-import org.junit.Test;
 import net.sympower.iec60870.common.CauseOfTransmission;
 import net.sympower.iec60870.common.IEC60870Settings;
 import net.sympower.iec60870.common.api.IEC60870EventListener;
@@ -42,23 +40,21 @@ import net.sympower.iec60870.spy.ClientSpy;
 import net.sympower.iec60870.spy.RespondingServer;
 import net.sympower.iec60870.spy.ServerSpy;
 import net.sympower.iec60870.spy.ThrowingServer;
+import org.junit.After;
+import org.junit.Test;
 
+import java.io.ByteArrayInputStream;
 import java.io.DataInputStream;
 import java.io.DataOutputStream;
 import java.io.IOException;
+import java.io.InputStream;
 import java.io.OutputStream;
 import java.io.PipedInputStream;
 import java.io.PipedOutputStream;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.stream.IntStream;
 
-import static org.awaitility.Awaitility.await;
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertFalse;
-import static org.junit.Assert.assertNotEquals;
-import static org.junit.Assert.assertNotNull;
-import static org.junit.Assert.assertTrue;
-import static org.junit.Assert.fail;
 import static net.sympower.iec60870.common.ASduType.C_IC_NA_1;
 import static net.sympower.iec60870.common.ASduType.C_TS_NA_1;
 import static net.sympower.iec60870.iec101.Iec101TestConstants.COMMON_ADDRESS;
@@ -68,6 +64,13 @@ import static net.sympower.iec60870.iec101.Iec101TestConstants.LINK_ADDRESS;
 import static net.sympower.iec60870.iec101.Iec101TestConstants.SINGLE_COMMAND_ADDRESS;
 import static net.sympower.iec60870.iec101.Iec101TestConstants.TIMEOUT_SECONDS;
 import static net.sympower.iec60870.iec101.Iec101TestConstants.TIMEOUT_UNIT;
+import static org.awaitility.Awaitility.await;
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNotEquals;
+import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.fail;
 
 public class Iec101ClientServerLinkLevelIntegrationTest {
 
@@ -88,6 +91,7 @@ public class Iec101ClientServerLinkLevelIntegrationTest {
         if (serverConnection != null && !serverConnection.isClosed()) {
             serverConnection.close();
         }
+        
     }
 
     @Test
@@ -194,6 +198,39 @@ public class Iec101ClientServerLinkLevelIntegrationTest {
     }
 
     @Test
+    public void testLinkAddressEncodingWithOneByteAddress() throws Exception {
+        IEC60870Settings settings = new IEC60870Settings();
+        settings.setLinkAddressLength(1);
+        givenClientAndServerAreConnectedWithSettings(new RespondingServer(), new AsduRecordingClient(), settings);
+        
+        whenClientSendsCommand();
+
+        thenFramesHaveCorrectAddressLength(1);
+    }
+    
+    @Test
+    public void testLinkAddressEncodingWithTwoByteAddress() throws Exception {
+        IEC60870Settings settings = new IEC60870Settings();
+        settings.setLinkAddressLength(2);
+        givenClientAndServerAreConnectedWithSettings(new RespondingServer(), new AsduRecordingClient(), settings);
+
+        whenClientSendsCommand();
+
+        thenFramesHaveCorrectAddressLength(2);
+    }
+    
+    private void givenClientAndServerAreConnectedWithSettings(ServerSpy serverSpy, ClientSpy clientSpy, IEC60870Settings settings) throws IOException {
+        spyServer = serverSpy;
+        spyClient = clientSpy;
+
+        setupConnectionsWithByteCapture((IEC60870EventListener) serverSpy, (IEC60870EventListener) clientSpy, settings);
+
+        // Clear initialization traffic to focus on test-specific frames
+        clientToServer.clearCapturedBytes();
+        serverToClient.clearCapturedBytes();
+    }
+    
+    @Test
     public void testChecksumCalculationAndValidation() throws Exception {
         givenClientAndServerAreConnected(
             new RespondingServer(),
@@ -204,6 +241,32 @@ public class Iec101ClientServerLinkLevelIntegrationTest {
         
         thenFrameChecksumIsCorrect();
         thenChecksumCoversCorrectFields();
+    }
+
+    @Test
+    public void testRequestClass1DataReturnsRespNackNoData() throws Exception {
+        givenClientAndServerAreConnected(
+            new RespondingServer(),
+            new AsduRecordingClient()
+        );
+        
+        whenClientSendsRequestClass1DataFrame();
+        
+        thenServerReceivesRequestClass1DataFrame();
+        thenServerSendsRespNackNoDataFrame();
+    }
+
+    @Test
+    public void testRequestClass2DataReturnsRespNackNoData() throws Exception {
+        givenClientAndServerAreConnected(
+            new RespondingServer(),
+            new AsduRecordingClient()
+        );
+        
+        whenClientSendsRequestClass2DataFrame();
+        
+        thenServerReceivesRequestClass2DataFrame();
+        thenServerSendsRespNackNoDataFrame();
     }
 
     @Test
@@ -280,7 +343,7 @@ public class Iec101ClientServerLinkLevelIntegrationTest {
 
     private void whenServerResponds() {
         await().atMost(TIMEOUT_SECONDS, TIMEOUT_UNIT)
-               .until(() -> !serverToClient.getCapturedBytes().isEmpty());
+               .until(() -> serverToClient.getCapturedBytes().length > 0);
     }
 
     private void whenClientSendsInterrogationCommand() throws Exception {
@@ -293,19 +356,33 @@ public class Iec101ClientServerLinkLevelIntegrationTest {
                .until(() -> spyServer.isConnectionReady() && spyClient.isConnectionReady());
     }
 
+    private void whenClientSendsRequestClass1DataFrame() throws Exception {
+        sendFixedFrameDirectly(Iec101Frame.FunctionCode.REQUEST_CLASS_1_DATA);
+    }
+
+    private void whenClientSendsRequestClass2DataFrame() throws Exception {
+        sendFixedFrameDirectly(Iec101Frame.FunctionCode.REQUEST_CLASS_2_DATA);
+    }
+
     private void thenServerReceivesCommand() {
         assertTrue("Server should have received some command", spyServer.hasReceivedAnyCommand());
     }
 
     private void thenServerSendsAckByteAtLinkLevel() {
-        List<Byte> serverBytes = serverToClient.getCapturedBytes();
-        boolean foundAck = serverBytes.contains((byte) 0xE5);
+        byte[] serverToClientBytes = serverToClient.getCapturedBytes();
+        boolean foundAck = IntStream.range(0, serverToClientBytes.length)
+            .map(i -> serverToClientBytes[i])
+            .anyMatch(b -> b == (byte) 0xE5);
+
         assertTrue("Server should send ACK byte (0xE5) for valid command", foundAck);
     }
 
     private void thenServerSendsNackByteAtLinkLevel() {
-        List<Byte> serverBytes = serverToClient.getCapturedBytes();
-        boolean foundNack = serverBytes.contains((byte) 0xA2);
+        byte[] serverToClientBytes = serverToClient.getCapturedBytes();
+        boolean foundNack = IntStream.range(0, serverToClientBytes.length)
+            .map(i -> serverToClientBytes[i])
+            .anyMatch(b -> b == (byte) 0xA2);
+
         assertTrue("Server should send NACK byte (0xA2) when frame handling fails", foundNack);
     }
 
@@ -318,8 +395,10 @@ public class Iec101ClientServerLinkLevelIntegrationTest {
     }
 
     private void thenClientDoesNotSendAck() {
-        List<Byte> clientBytes = clientToServer.getCapturedBytes();
-        boolean foundNack = clientBytes.contains((byte) 0xA2);
+        byte[] clientToServerBytes = clientToServer.getCapturedBytes();
+        boolean foundNack = IntStream.range(0, clientToServerBytes.length)
+            .map(i -> clientToServerBytes[i])
+            .anyMatch(b -> b == (byte) 0xA2);
         assertFalse("Client should not send NACK byte (0xA2)", foundNack);
     }
 
@@ -328,16 +407,14 @@ public class Iec101ClientServerLinkLevelIntegrationTest {
     }
 
     private int thenExtractFirstVariableFrameFCBValue() {
-        List<Byte> commandBytes = clientToServer.getCapturedBytes();
-        Iec101Frame frame = decodeFrameFromBytes(commandBytes);
+        Iec101Frame frame = decodeFrameFromBytes(clientToServer.getCapturedBytes());
         assertNotNull("Should find valid frame structure", frame);
         assertTrue("Expected Variable frame for test command", frame instanceof Iec101VariableFrame);
         return extractVariableFrameFCBValue((Iec101VariableFrame) frame);
     }
 
     private int thenExtractSecondVariableFrameFCBValue() {
-        List<Byte> commandBytes = clientToServer.getCapturedBytes();
-        Iec101Frame frame = decodeFrameFromBytes(commandBytes);
+        Iec101Frame frame = decodeFrameFromBytes(clientToServer.getCapturedBytes());
         assertNotNull("Should find valid frame structure", frame);
         assertTrue("Expected Variable frame for test command", frame instanceof Iec101VariableFrame);
         return extractVariableFrameFCBValue((Iec101VariableFrame) frame);
@@ -353,9 +430,7 @@ public class Iec101ClientServerLinkLevelIntegrationTest {
     }
 
     private void thenVariableFrameHasPrimaryBitSet() {
-        List<Byte> clientBytes = clientToServer.getCapturedBytes();
-        
-        Iec101Frame frame = decodeFrameFromBytes(clientBytes);
+        Iec101Frame frame = decodeFrameFromBytes(clientToServer.getCapturedBytes());
         assertNotNull("Should find valid frame structure", frame);
         assertTrue("Expected Variable frame for test command", frame instanceof Iec101VariableFrame);
         
@@ -368,9 +443,7 @@ public class Iec101ClientServerLinkLevelIntegrationTest {
     }
 
     private void thenVariableFrameHasCorrectAddressField() {
-        List<Byte> clientBytes = clientToServer.getCapturedBytes();
-        
-        Iec101Frame frame = decodeFrameFromBytes(clientBytes);
+        Iec101Frame frame = decodeFrameFromBytes(clientToServer.getCapturedBytes());
         assertNotNull("Should find valid frame structure", frame);
         assertTrue("Expected Variable frame for test command", frame instanceof Iec101VariableFrame);
         
@@ -378,9 +451,7 @@ public class Iec101ClientServerLinkLevelIntegrationTest {
     }
 
     private void thenFixedResponseFrameHasPrimaryBitClear() {
-        List<Byte> serverBytes = serverToClient.getCapturedBytes();
-        
-        Iec101Frame frame = decodeFrameFromBytes(serverBytes);
+        Iec101Frame frame = decodeFrameFromBytes(serverToClient.getCapturedBytes());
         if (frame != null && frame.getFrameType() != Iec101Frame.FrameType.SINGLE_CHARACTER) {
             assertTrue("Expected Fixed response frame", frame instanceof Iec101FixedFrame);
             assertFixedResponseFramePrimaryBitClear((Iec101FixedFrame) frame);
@@ -392,9 +463,7 @@ public class Iec101ClientServerLinkLevelIntegrationTest {
     }
 
     private void thenFixedResponseFrameHasCorrectAddressField() {
-        List<Byte> serverBytes = serverToClient.getCapturedBytes();
-        
-        Iec101Frame frame = decodeFrameFromBytes(serverBytes);
+        Iec101Frame frame = decodeFrameFromBytes(serverToClient.getCapturedBytes());
         if (frame != null && frame.getFrameType() != Iec101Frame.FrameType.SINGLE_CHARACTER) {
             assertTrue("Expected Fixed response frame", frame instanceof Iec101FixedFrame);
             assertFixedResponseFrameCorrectAddressField((Iec101FixedFrame) frame);
@@ -405,59 +474,16 @@ public class Iec101ClientServerLinkLevelIntegrationTest {
         assertEquals("Server fixed response address should match link address", LINK_ADDRESS, frame.getLinkAddress());
     }
 
-    private Iec101Frame decodeFrameFromBytes(List<Byte> bytes) {
+    private Iec101Frame decodeFrameFromBytes(byte[] bytes) {
         try {
-            // Convert List<Byte> to byte array
-            byte[] byteArray = new byte[bytes.size()];
-            for (int i = 0; i < bytes.size(); i++) {
-                byteArray[i] = bytes.get(i);
-            }
-            
-            // Create ByteArrayInputStream from the captured bytes
-            java.io.ByteArrayInputStream bais = new java.io.ByteArrayInputStream(byteArray);
-            
-            // Use the actual frame decoder
-            return Iec101Frame.decode(bais, new IEC60870Settings());
+            return Iec101Frame.decode(new ByteArrayInputStream(bytes), new IEC60870Settings());
         } catch (Exception e) {
             return null;
         }
     }
 
-    private List<Iec101Frame> decodeAllFramesFromBytes(List<Byte> bytes) {
-        List<Iec101Frame> frames = new ArrayList<>();
-        try {
-            // Convert List<Byte> to byte array
-            byte[] byteArray = new byte[bytes.size()];
-            for (int i = 0; i < bytes.size(); i++) {
-                byteArray[i] = bytes.get(i);
-            }
-            
-            // Create ByteArrayInputStream from the captured bytes
-            java.io.ByteArrayInputStream bais = new java.io.ByteArrayInputStream(byteArray);
-
-            // Decode multiple frames until stream is exhausted
-            while (bais.available() > 0) {
-                try {
-                    Iec101Frame frame = Iec101Frame.decode(bais, new IEC60870Settings());
-                    if (frame != null) {
-                        frames.add(frame);
-                    } else {
-                        break; // No more valid frames
-                    }
-                } catch (Exception e) {
-                    break; // Stop on first decode error
-                }
-            }
-        } catch (Exception e) {
-        }
-        return frames;
-    }
-
     private void thenVariableFrameHasCorrectStructure() {
-        List<Byte> clientBytes = clientToServer.getCapturedBytes();
-        
-        // Use actual frame decoder to parse the bytes
-        Iec101Frame frame = decodeFrameFromBytes(clientBytes);
+        Iec101Frame frame = decodeFrameFromBytes(clientToServer.getCapturedBytes());
         assertNotNull("Should find valid frame structure", frame);
         
         if (frame.getFrameType() == Iec101Frame.FrameType.VARIABLE_LENGTH) {
@@ -471,17 +497,12 @@ public class Iec101ClientServerLinkLevelIntegrationTest {
     }
 
     private void thenVariableFrameHasValidChecksum() {
-        List<Byte> clientBytes = clientToServer.getCapturedBytes();
-        
-        // Use actual frame decoder - if it successfully decodes, checksum is valid
-        Iec101Frame frame = decodeFrameFromBytes(clientBytes);
+        Iec101Frame frame = decodeFrameFromBytes(clientToServer.getCapturedBytes());
         assertNotNull("Frame should decode successfully (implies valid checksum)", frame);
     }
 
     private void thenVariableFrameContainsAsdu() {
-        List<Byte> clientBytes = clientToServer.getCapturedBytes();
-        
-        Iec101Frame frame = decodeFrameFromBytes(clientBytes);
+        Iec101Frame frame = decodeFrameFromBytes(clientToServer.getCapturedBytes());
         assertNotNull("Should find valid frame structure", frame);
         
         if (frame.getFrameType() == Iec101Frame.FrameType.VARIABLE_LENGTH) {
@@ -498,9 +519,7 @@ public class Iec101ClientServerLinkLevelIntegrationTest {
     }
 
     private void thenVariableFrameControlFieldHasPrimaryBitSet() {
-        List<Byte> clientBytes = clientToServer.getCapturedBytes();
-        
-        Iec101Frame frame = decodeFrameFromBytes(clientBytes);
+        Iec101Frame frame = decodeFrameFromBytes(clientToServer.getCapturedBytes());
         assertNotNull("Should find valid frame structure", frame);
         assertTrue("Expected Variable frame for test command", frame instanceof Iec101VariableFrame);
         
@@ -512,9 +531,7 @@ public class Iec101ClientServerLinkLevelIntegrationTest {
     }
 
     private void thenVariableFrameControlFieldHasFrameCountValidBitSet() {
-        List<Byte> clientBytes = clientToServer.getCapturedBytes();
-        
-        Iec101Frame frame = decodeFrameFromBytes(clientBytes);
+        Iec101Frame frame = decodeFrameFromBytes(clientToServer.getCapturedBytes());
         assertNotNull("Should find valid frame structure", frame);
         assertTrue("Expected Variable frame for test command", frame instanceof Iec101VariableFrame);
         
@@ -522,9 +539,7 @@ public class Iec101ClientServerLinkLevelIntegrationTest {
     }
 
     private void thenVariableFrameControlFieldHasCorrectFunctionCode(Iec101Frame.FunctionCode expectedFunctionCode) {
-        List<Byte> clientBytes = clientToServer.getCapturedBytes();
-        
-        Iec101Frame frame = decodeFrameFromBytes(clientBytes);
+        Iec101Frame frame = decodeFrameFromBytes(clientToServer.getCapturedBytes());
         assertNotNull("Should find valid frame structure", frame);
         assertTrue("Expected Variable frame for test command", frame instanceof Iec101VariableFrame);
         
@@ -535,43 +550,29 @@ public class Iec101ClientServerLinkLevelIntegrationTest {
     }
 
     private void thenControlFieldReservedBitsAreZero() {
-        List<Byte> clientBytes = clientToServer.getCapturedBytes();
-        
-        // Use actual frame decoder - if it successfully decodes, control field is well-formed
-        Iec101Frame frame = decodeFrameFromBytes(clientBytes);
+        Iec101Frame frame = decodeFrameFromBytes(clientToServer.getCapturedBytes());
         assertNotNull("Frame should decode successfully (implies well-formed control field)", frame);
         
     }
 
     private void thenFrameChecksumIsCorrect() {
-        List<Byte> clientBytes = clientToServer.getCapturedBytes();
-        
-        Iec101Frame frame = decodeFrameFromBytes(clientBytes);
+        Iec101Frame frame = decodeFrameFromBytes(clientToServer.getCapturedBytes());
         assertNotNull("Frame should decode successfully (implies correct checksum)", frame);
     }
 
     private void thenChecksumCoversCorrectFields() {
-        List<Byte> clientBytes = clientToServer.getCapturedBytes();
-        
-        Iec101Frame frame = decodeFrameFromBytes(clientBytes);
+        Iec101Frame frame = decodeFrameFromBytes(clientToServer.getCapturedBytes());
         assertNotNull("Frame should decode successfully (implies checksum covers correct fields)", frame);
     }
 
     private void thenConnectionEstablishmentFollowsProtocol() {
-        List<Byte> clientBytes = clientToServer.getCapturedBytes();
-        List<Byte> serverBytes = serverToClient.getCapturedBytes();
-        
-        List<Iec101Frame> clientFrames = decodeAllFramesFromBytes(clientBytes);
-        List<Iec101Frame> serverFrames = decodeAllFramesFromBytes(serverBytes);
+        List<Iec101Frame> clientFrames = decodeFramesFromBytes(clientToServer.getCapturedBytes());
+        List<Iec101Frame> serverFrames = decodeFramesFromBytes(serverToClient.getCapturedBytes());
         
 
-        // Validate first client frame (REQUEST_LINK_STATUS)
         assertRequestLinkStatusFrame(clientFrames.get(0));
-        // Validate second client frame (RESET_REMOTE_LINK)
         assertResetRemoteLinkFrame(clientFrames.get(1));
-        // Validate first server frame (STATUS_LINK_NO_DATA)
         assertStatusLinkNoDataFrame(serverFrames.get(0));
-        // Validate second server frame (ACK)
         assertAckFrame(serverFrames.get(1));
     }
     
@@ -604,14 +605,14 @@ public class Iec101ClientServerLinkLevelIntegrationTest {
     }
     
     private void assertStatusLinkNoDataFrame(Iec101Frame frame) {
-        assertEquals("STATUS_LINK_NO_DATA frame should be fixed length", 
+        assertEquals("STATUS_LINK frame should be fixed length", 
                      Iec101Frame.FrameType.FIXED_LENGTH, frame.getFrameType());
         assertTrue("Frame should be a fixed frame", frame instanceof Iec101FixedFrame);
         Iec101FixedFrame fixedFrame = (Iec101FixedFrame) frame;
-        assertFalse("STATUS_LINK_NO_DATA frame should be from secondary station", fixedFrame.getPrm());
-        assertEquals("Frame should be STATUS_LINK_NO_DATA", 
-                     Iec101Frame.FunctionCode.STATUS_LINK_NO_DATA, fixedFrame.getFunctionCode());
-        assertEquals("STATUS_LINK_NO_DATA frame should use configured link address", 
+        assertFalse("STATUS_LINK frame should be from secondary station", fixedFrame.getPrm());
+        assertEquals("Frame should be STATUS_LINK", 
+                     Iec101Frame.FunctionCode.STATUS_LINK, fixedFrame.getFunctionCode());
+        assertEquals("STATUS_LINK frame should use configured link address", 
                      LINK_ADDRESS, fixedFrame.getLinkAddress());
     }
     
@@ -626,7 +627,58 @@ public class Iec101ClientServerLinkLevelIntegrationTest {
         assertTrue("Client should be ready after initialization", spyClient.isConnectionReady());
     }
 
+    private void thenServerReceivesRequestClass1DataFrame() {
+        byte[] clientBytes = clientToServer.getCapturedBytes();
+        List<Iec101Frame> clientFrames = decodeFramesFromBytes(clientBytes);
+        
+        boolean foundRequestClass1Data = clientFrames.stream()
+            .filter(frame -> frame instanceof Iec101FixedFrame)
+            .map(frame -> (Iec101FixedFrame) frame)
+            .anyMatch(frame -> frame.getFunctionCode() == Iec101Frame.FunctionCode.REQUEST_CLASS_1_DATA);
+        
+        assertTrue("Client should have sent REQUEST_CLASS_1_DATA frame", foundRequestClass1Data);
+    }
+
+    private void thenServerReceivesRequestClass2DataFrame() {
+        List<Iec101Frame> clientFrames = decodeFramesFromBytes(clientToServer.getCapturedBytes());
+        
+        boolean foundRequestClass2Data = clientFrames.stream()
+            .filter(frame -> frame instanceof Iec101FixedFrame)
+            .map(frame -> (Iec101FixedFrame) frame)
+            .anyMatch(frame -> frame.getFunctionCode() == Iec101Frame.FunctionCode.REQUEST_CLASS_2_DATA);
+        
+        assertTrue("Client should have sent REQUEST_CLASS_2_DATA frame", foundRequestClass2Data);
+    }
+
+    private void thenServerSendsRespNackNoDataFrame() {
+        byte[] serverBytes = serverToClient.getCapturedBytes();
+        List<Iec101Frame> serverFrames = decodeFramesFromBytes(serverBytes);
+        
+        boolean foundRespNackNoData = serverFrames.stream()
+            .filter(frame -> frame instanceof Iec101FixedFrame)
+            .map(frame -> (Iec101FixedFrame) frame)
+            .anyMatch(frame -> frame.getFunctionCode() == Iec101Frame.FunctionCode.RESP_NACK_NO_DATA);
+        
+        assertTrue("Server should have responded with RESP_NACK_NO_DATA frame", foundRespNackNoData);
+        
+        Iec101FixedFrame respFrame = serverFrames.stream()
+            .filter(frame -> frame instanceof Iec101FixedFrame)
+            .map(frame -> (Iec101FixedFrame) frame)
+            .filter(frame -> frame.getFunctionCode() == Iec101Frame.FunctionCode.RESP_NACK_NO_DATA)
+            .findFirst()
+            .orElse(null);
+        
+        if (respFrame != null) {
+            assertFalse("RESP_NACK_NO_DATA should be from secondary station", respFrame.getPrm());
+            assertEquals("RESP_NACK_NO_DATA should use correct link address", LINK_ADDRESS, respFrame.getLinkAddress());
+        }
+    }
+
     private void setupConnectionsWithByteCapture(IEC60870EventListener serverListener, IEC60870EventListener clientListener) throws IOException {
+        setupConnectionsWithByteCapture(serverListener, clientListener, new IEC60870Settings());
+    }
+    
+    private void setupConnectionsWithByteCapture(IEC60870EventListener serverListener, IEC60870EventListener clientListener, IEC60870Settings settings) throws IOException {
         // Create connections directly instead of using builders, so we don't need to open a serial ports in tests
 
         serverToClient = new ByteCapturingOutputStream();
@@ -639,11 +691,11 @@ public class Iec101ClientServerLinkLevelIntegrationTest {
         PipedOutputStream serverToClientPipe = new PipedOutputStream();
         PipedInputStream clientInput = new PipedInputStream();
         clientInput.connect(serverToClientPipe);
-
+        
         serverConnection = new Iec101ServerConnection(
             new DataInputStream(serverInput),
             new DataOutputStream(new TeeOutputStream(serverToClientPipe, serverToClient)),
-            new IEC60870Settings(),
+            settings,
             LINK_ADDRESS
         );
         
@@ -655,7 +707,7 @@ public class Iec101ClientServerLinkLevelIntegrationTest {
         clientConnection = new Iec101ClientConnection(
             new DataInputStream(clientInput),
             new DataOutputStream(new TeeOutputStream(clientToServerPipe, clientToServer)),
-            new IEC60870Settings(),
+            settings,
             LINK_ADDRESS,
             clientSettings
         );
@@ -702,9 +754,13 @@ public class Iec101ClientServerLinkLevelIntegrationTest {
             }
         }
 
-        public List<Byte> getCapturedBytes() {
+        public byte[] getCapturedBytes() {
             synchronized (lock) {
-                return new ArrayList<>(capturedBytes);
+                byte[] byteArray = new byte[capturedBytes.size()];
+                for (int i = 0; i < capturedBytes.size(); i++) {
+                    byteArray[i] = capturedBytes.get(i);
+                }
+                return byteArray;
             }
         }
 
@@ -713,6 +769,68 @@ public class Iec101ClientServerLinkLevelIntegrationTest {
                 capturedBytes.clear();
             }
         }
+    }
+    
+    private void thenFramesHaveCorrectAddressLength(int expectedAddressLength) {
+        verifyFrameStructureWithAddressLength(clientToServer.getCapturedBytes(), expectedAddressLength);
+        verifyFrameStructureWithAddressLength(serverToClient.getCapturedBytes(), expectedAddressLength);
+    }
+    
+    private void verifyFrameStructureWithAddressLength(byte[] frameBytes, int expectedAddressLength) {
+        IEC60870Settings settings = new IEC60870Settings();
+        settings.setLinkAddressLength(expectedAddressLength);
+        
+        List<Iec101Frame> frames = decodeFramesFromStream(new ByteArrayInputStream(frameBytes), settings);
+        assertFalse("Should contain decodable frames", frames.isEmpty());
+        
+        for (Iec101Frame frame : frames) {
+            if (frame instanceof Iec101FixedFrame) {
+                assertEquals(LINK_ADDRESS, ((Iec101FixedFrame) frame).getLinkAddress());
+            } else if (frame instanceof Iec101VariableFrame) {
+                assertEquals(LINK_ADDRESS, ((Iec101VariableFrame) frame).getLinkAddress());
+            }
+        }
+    }
+    
+    private List<Iec101Frame> decodeFramesFromBytes(byte[] bytes) {
+        return decodeFramesFromStream(new ByteArrayInputStream(bytes), new IEC60870Settings());
+    }
+    
+    private List<Iec101Frame> decodeFramesFromStream(InputStream inputStream, IEC60870Settings settings) {
+        List<Iec101Frame> frames = new ArrayList<>();
+
+        while (true) {
+            try {
+                Iec101Frame frame = Iec101Frame.decode(inputStream, settings);
+                frames.add(frame);
+            }
+            catch (IOException e) {
+                // no more frames
+                break;
+            }
+        }
+
+        return frames;
+    }
+
+    private void sendFixedFrameDirectly(Iec101Frame.FunctionCode functionCode) throws Exception {
+        clientToServer.clearCapturedBytes();
+        serverToClient.clearCapturedBytes();
+        
+        Iec101FixedFrame frame = new Iec101FixedFrame(
+            LINK_ADDRESS,
+            functionCode,
+            true, // PRIMARY_STATION
+            false, // FCV_CLEAR - not relevant for these commands
+            false, // FCB_CLEAR - not relevant for these commands
+            false, // ACD_CLEAR - not set on client frames
+            false  // DFC_CLEAR - not set on client frames
+        );
+
+        clientConnection.sendFixedFrame(frame);
+
+        await().atMost(TIMEOUT_SECONDS, TIMEOUT_UNIT)
+               .until(() -> serverToClient.getCapturedBytes().length > 0);
     }
 
     private static class TeeOutputStream extends OutputStream {

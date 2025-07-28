@@ -26,6 +26,7 @@ package net.sympower.iec60870.iec101.frame.encoding;
 import org.junit.Test;
 import net.sympower.iec60870.iec101.frame.Iec101FixedFrame;
 import net.sympower.iec60870.iec101.frame.Iec101Frame.FunctionCode;
+import net.sympower.iec60870.iec101.frame.BitUtils;
 
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
@@ -44,12 +45,9 @@ import static net.sympower.iec60870.iec101.frame.Iec101FrameTestUtils.FCB_SET;
 import static net.sympower.iec60870.iec101.frame.Iec101FrameTestUtils.FCV_DFC_BIT_POS;
 import static net.sympower.iec60870.iec101.frame.Iec101FrameTestUtils.FCV_DISABLED;
 import static net.sympower.iec60870.iec101.frame.Iec101FrameTestUtils.FCV_ENABLED;
-import static net.sympower.iec60870.iec101.frame.Iec101FrameTestUtils.FIXED_FRAME_ADDRESS_BYTE_POSITION;
-import static net.sympower.iec60870.iec101.frame.Iec101FrameTestUtils.FIXED_FRAME_CHECKSUM_BYTE_POSITION;
 import static net.sympower.iec60870.iec101.frame.Iec101FrameTestUtils.FIXED_FRAME_CONTROL_BYTE_POSITION;
 import static net.sympower.iec60870.iec101.frame.Iec101FrameTestUtils.FIXED_FRAME_LENGTH;
 import static net.sympower.iec60870.iec101.frame.Iec101FrameTestUtils.FIXED_FRAME_START_BYTE_POSITION;
-import static net.sympower.iec60870.iec101.frame.Iec101FrameTestUtils.FIXED_FRAME_STOP_BYTE_POSITION;
 import static net.sympower.iec60870.iec101.frame.Iec101FrameTestUtils.FUNCTION_CODE_MASK;
 import static net.sympower.iec60870.iec101.frame.Iec101FrameTestUtils.MIN_UNSIGNED_BYTE_VALUE;
 import static net.sympower.iec60870.iec101.frame.Iec101FrameTestUtils.PRIMARY_FUNCTION_CODE_COUNT;
@@ -72,6 +70,14 @@ import static net.sympower.iec60870.iec101.frame.Iec101FrameTestUtils.assertByte
 import static net.sympower.iec60870.iec101.frame.Iec101FrameTestUtils.getUnsignedByte;
 
 public class Iec101FixedFrameFormatTest {
+    
+    private static byte calculateChecksum(byte[] data) {
+        int sum = 0;
+        for (byte b : data) {
+            sum += b & 0xFF;
+        }
+        return (byte) (sum & 0xFF);
+    }
 
     @Test
     public void testResetRemoteLinkFrameFormat_shouldEncodeCorrectly() {
@@ -190,7 +196,7 @@ public class Iec101FixedFrameFormatTest {
             FunctionCode.RESET_REMOTE_LINK,
             FunctionCode.TEST_FUNCTION_LINK,
             FunctionCode.REQUEST_LINK_STATUS,
-            FunctionCode.STATUS_LINK_NO_DATA
+            FunctionCode.RESP_NACK_NO_DATA
         };
     }
 
@@ -215,7 +221,8 @@ public class Iec101FixedFrameFormatTest {
     private byte[] whenFrameIsEncoded(Iec101FixedFrame frame) {
         byte[] buffer = new byte[TEST_BUFFER_SIZE];
         int frameLength = frame.encode(buffer, DEFAULT_SETTINGS);
-        assertEquals("Frame should be exactly 5 bytes", FIXED_FRAME_LENGTH, frameLength);
+        int expectedLength = 5 + DEFAULT_SETTINGS.getLinkAddressLength() - 1; // start + control + address + checksum + end
+        assertEquals("Frame should be exactly " + expectedLength + " bytes", expectedLength, frameLength);
         return buffer;
     }
 
@@ -233,14 +240,20 @@ public class Iec101FixedFrameFormatTest {
 
     private void thenFrameHasCorrectFormat(byte[] frame) {
         assertByteEquals("Start byte must be 0x10", START_BYTE, frame, FIXED_FRAME_START_BYTE_POSITION);
-        assertByteEquals("Stop byte must be 0x16", STOP_BYTE, frame, FIXED_FRAME_STOP_BYTE_POSITION);
+        int stopBytePosition = 4 + DEFAULT_SETTINGS.getLinkAddressLength() - 1;
+        assertByteEquals("Stop byte must be 0x16", STOP_BYTE, frame, stopBytePosition);
         
         assertBitClear(frame, FIXED_FRAME_CONTROL_BYTE_POSITION, RESERVED_BIT_POS, "Reserved bit (bit 7) must always be clear");
     }
 
     private void thenFrameHasCorrectFormatWithAddress(byte[] frame, int expectedAddress) {
         thenFrameHasCorrectFormat(frame);
-        assertByteEquals("Address field must match expected value", expectedAddress, frame, FIXED_FRAME_ADDRESS_BYTE_POSITION);
+        // Extract address from frame based on address length
+        int addressLength = DEFAULT_SETTINGS.getLinkAddressLength();
+        byte[] addressBytes = new byte[addressLength];
+        System.arraycopy(frame, 2, addressBytes, 0, addressLength); // Address starts at position 2
+        int actualAddress = BitUtils.readBytes(addressBytes, 0, addressLength);
+        assertEquals("Address field must match expected value", expectedAddress, actualAddress);
     }
 
     private void thenFrameHasCorrectPrimaryControlFieldWithFcbSetFcvSet(byte[] frame, int expectedFunctionCode) {
@@ -282,18 +295,26 @@ public class Iec101FixedFrameFormatTest {
 
     private void thenFrameHasCorrectChecksum(byte[] frame) {
         int controlByte = getUnsignedByte(frame, FIXED_FRAME_CONTROL_BYTE_POSITION);
-        int addressByte = getUnsignedByte(frame, FIXED_FRAME_ADDRESS_BYTE_POSITION);
-
-        int expectedChecksum = (controlByte + addressByte) & BYTE_TO_UNSIGNED_MASK;
-        int actualChecksum = getUnsignedByte(frame, FIXED_FRAME_CHECKSUM_BYTE_POSITION);
+        // Extract address bytes and calculate checksum
+        int addressLength = DEFAULT_SETTINGS.getLinkAddressLength();
+        byte[] checksumData = new byte[1 + addressLength];
+        checksumData[0] = (byte) controlByte;
+        System.arraycopy(frame, 2, checksumData, 1, addressLength);
+        int expectedChecksum = calculateChecksum(checksumData) & BYTE_TO_UNSIGNED_MASK;
+        
+        int checksumPosition = 2 + addressLength;
+        int actualChecksum = getUnsignedByte(frame, checksumPosition);
 
         assertEquals("Checksum must be 8-bit sum of control field + address field", expectedChecksum, actualChecksum);
     }
 
     private void thenFrameHasCorrectAddress(byte[] frame, int expectedAddress) {
-        assertByteEquals("Address field must match expected value", expectedAddress, frame,
-                         FIXED_FRAME_ADDRESS_BYTE_POSITION
-        );
+        // Extract address from frame based on address length
+        int addressLength = DEFAULT_SETTINGS.getLinkAddressLength();
+        byte[] addressBytes = new byte[addressLength];
+        System.arraycopy(frame, 2, addressBytes, 0, addressLength); // Address starts at position 2
+        int actualAddress = BitUtils.readBytes(addressBytes, 0, addressLength);
+        assertEquals("Address field must match expected value", expectedAddress, actualAddress);
     }
 
     private void thenFramePropertiesMatch(Iec101FixedFrame original, Iec101FixedFrame decoded) {
@@ -310,13 +331,18 @@ public class Iec101FixedFrameFormatTest {
     private void thenBytePositionsMatchSpecification(byte[] frame, int expectedAddress) {
         assertByteEquals("Byte 0: Start must be 0x10", START_BYTE, frame, FIXED_FRAME_START_BYTE_POSITION);
         assertByteInRange("Byte 1: Control field must be valid [0-255]", frame, FIXED_FRAME_CONTROL_BYTE_POSITION);
-        assertByteEquals("Byte 2: Link address must match expected", expectedAddress, frame,
-                         FIXED_FRAME_ADDRESS_BYTE_POSITION
-        );
-        assertByteInRange("Byte 3: Checksum must be valid [0-255]", frame, FIXED_FRAME_CHECKSUM_BYTE_POSITION);
-        assertByteEquals("Byte 4: Stop must be 0x16", STOP_BYTE, frame, FIXED_FRAME_STOP_BYTE_POSITION);
+        // Check address bytes
+        int addressLength = DEFAULT_SETTINGS.getLinkAddressLength();
+        for (int i = 0; i < addressLength; i++) {
+            assertByteInRange("Address byte " + i + " must be valid [0-255]", frame, 2 + i);
+        }
+        int checksumPosition = 2 + addressLength;
+        assertByteInRange("Checksum must be valid [0-255]", frame, checksumPosition);
+        int stopBytePosition = 3 + addressLength;
+        assertByteEquals("Stop must be 0x16", STOP_BYTE, frame, stopBytePosition);
 
-        for (int i = FIXED_FRAME_LENGTH; i < frame.length; i++) {
+        int frameLength = 5 + DEFAULT_SETTINGS.getLinkAddressLength() - 1;
+        for (int i = frameLength; i < frame.length; i++) {
             assertEquals("Buffer beyond frame length must be zero at position " + i, MIN_UNSIGNED_BYTE_VALUE, frame[i]);
         }
     }

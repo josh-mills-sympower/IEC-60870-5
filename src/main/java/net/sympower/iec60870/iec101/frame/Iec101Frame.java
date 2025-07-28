@@ -70,11 +70,11 @@ public abstract class Iec101Frame {
         REQUEST_CLASS_2_DATA(11),
         
         // Secondary station functions (PRM=0)
-        ACK_CONFIRM(0),
         NACK_MESSAGE(1),
         STATUS_LINK_ACCESS_DEMAND(8),
-        STATUS_LINK_NO_DATA(9),
-        USER_DATA_RESPONSE(8),
+        RESP_NACK_NO_DATA(9),
+        STATUS_LINK(11),
+        USER_DATA_RESPONSE(0),
         NACK_NOT_FUNCTIONING(14),
         NACK_NOT_IMPLEMENTED(15);
         
@@ -91,7 +91,7 @@ public abstract class Iec101Frame {
         public static FunctionCode fromCode(int code, boolean prm) {
             switch (code) {
                 case 0:
-                    return prm ? RESET_REMOTE_LINK : ACK_CONFIRM;
+                    return prm ? RESET_REMOTE_LINK : USER_DATA_RESPONSE;
                 case 1:
                     return prm ? RESET_USER_PROCESS : NACK_MESSAGE;
                 case 2:
@@ -108,11 +108,11 @@ public abstract class Iec101Frame {
                     }
                     throw new IllegalArgumentException("Function code 8 not valid for primary station");
                 case 9:
-                    return prm ? REQUEST_LINK_STATUS : STATUS_LINK_NO_DATA;
+                    return prm ? REQUEST_LINK_STATUS : RESP_NACK_NO_DATA;
                 case 10:
                     return REQUEST_CLASS_1_DATA;
                 case 11:
-                    return REQUEST_CLASS_2_DATA;
+                    return prm ? REQUEST_CLASS_2_DATA : STATUS_LINK;
                 case 14:
                     return NACK_NOT_FUNCTIONING;
                 case 15:

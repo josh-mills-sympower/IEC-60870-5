@@ -32,7 +32,7 @@ public class SampleIEC101Client {
     private static final String SEND_STARTDT = "t";
 
     public static void main(String[] args) throws IOException {
-        String portName = args.length > 0 ? args[0] : "/dev/ttys009";
+        String portName = args.length > 0 ? args[0] : "COM11";
         int baudRate = args.length > 1 ? Integer.parseInt(args[1]) : 9600;
         int commonAddress = args.length > 2 ? Integer.parseInt(args[2]) : 1;
 
