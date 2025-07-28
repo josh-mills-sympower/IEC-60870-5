@@ -234,12 +234,13 @@ public class IEC101Client {
             .stopBits(1)                      // 1 stop bit
             .linkAddress(1)                   // Remote station address
             .initializationTimeoutMs(5000)    // Initialization timeout
+            .pollingIntervalMs(1000)          // Automatic polling every 1000ms (Class 1/2 alternating)
             .build();
         
-        // Start data transfer
+        // Start data transfer with automatic polling enabled
         client.startDataTransfer(new ClientEventHandler());
         
-        // Send commands
+        // Send commands - responses arrive automatically via polling
         client.interrogation(1, CauseOfTransmission.ACTIVATION,
                            new IeQualifierOfInterrogation(20));
         
@@ -253,7 +254,9 @@ public class IEC101Client {
 ```java
 import net.sympower.iec60870.common.api.*;
 import net.sympower.iec60870.common.*;
+import net.sympower.iec60870.common.elements.*;
 import net.sympower.iec60870.iec101.api.*;
+import net.sympower.iec60870.iec101.connection.Iec101ServerConnection;
 import com.fazecast.jSerialComm.SerialPort;
 
 public class IEC101Server {
@@ -270,12 +273,77 @@ public class IEC101Server {
             @Override
             public void onConnectionAccepted(IEC60870Connection connection) {
                 try {
-                    connection.startDataTransfer(new ServerEventHandler(connection));
+                    connection.startDataTransfer(new Iec101ServerEventHandler((Iec101ServerConnection) connection));
                 } catch (Exception e) {
                     System.err.println("Error: " + e.getMessage());
                 }
             }
         });
+    }
+}
+
+class Iec101ServerEventHandler implements IEC60870EventListener {
+    private final Iec101ServerConnection serverConnection;
+    
+    public Iec101ServerEventHandler(Iec101ServerConnection connection) {
+        this.serverConnection = connection;
+    }
+    
+    @Override
+    public void onConnectionReady() {
+        System.out.println("IEC-101 server ready for data transfer");
+    }
+    
+    @Override
+    public void onAsduReceived(ASdu asdu) {
+        try {
+            System.out.println("Received: " + asdu.getTypeIdentification());
+            
+            if (asdu.getTypeIdentification() == ASduType.C_IC_NA_1) {
+                handleInterrogation(asdu);
+            }
+            // Handle other command types...
+        } catch (Exception e) {
+            System.err.println("Error processing ASDU: " + e.getMessage());
+        }
+    }
+    
+    @Override
+    public void onConnectionLost(Exception cause) {
+        System.out.println("IEC-101 connection lost: " + 
+                         (cause != null ? cause.getMessage() : "Unknown"));
+    }
+    
+    private void handleInterrogation(ASdu asdu) {
+        // Queue Class 1 confirmation (high priority - retrieved immediately via polling)
+        ASdu confirmation = new ASdu(
+            asdu.getTypeIdentification(), asdu.isSequenceOfElements(),
+            CauseOfTransmission.ACTIVATION_CON,
+            false, false, asdu.getOriginatorAddress(), asdu.getCommonAddress(),
+            asdu.getInformationObjects()
+        );
+        serverConnection.queueClass1Response(confirmation);
+        
+        // Queue Class 2 measurement data (normal priority - retrieved via alternating polling)
+        ASdu measurementData = new ASdu(
+            ASduType.M_ME_NB_1, false, CauseOfTransmission.INTERROGATED_BY_STATION,
+            false, false, 0, asdu.getCommonAddress(),
+            new InformationObject[] {
+                new InformationObject(100, new InformationElement[][] {
+                    { new IeScaledValue(1250), new IeQuality(false, false, false, false, false) }
+                })
+            }
+        );
+        serverConnection.queueClass2Response(measurementData);
+        
+        // Queue Class 1 termination (high priority - retrieved immediately via polling)
+        ASdu termination = new ASdu(
+            asdu.getTypeIdentification(), asdu.isSequenceOfElements(),
+            CauseOfTransmission.ACTIVATION_TERMINATION,
+            false, false, asdu.getOriginatorAddress(), asdu.getCommonAddress(),
+            asdu.getInformationObjects()
+        );
+        serverConnection.queueClass1Response(termination);
     }
 }
 ```
@@ -360,7 +428,6 @@ The library includes sample applications demonstrating both client and server us
 #### IEC 60870-5-101 (Serial) Limitations
 - **Unbalanced mode only**: Balanced mode not supported
 - **Point-to-point only**: One client, one server. No multi-drop configurations
-- **Basic link layer**: Access Demand (ACD) bit is hard-coded
 - **Limited flow control**: Data Flow Control (DFC) bit is hard-coded
 
 #### IEC 60870-5-104 (TCP/IP) Limitations

@@ -64,23 +64,6 @@ import static net.sympower.iec60870.iec101.frame.Iec101FrameTestUtils.VARIABLE_F
 import static net.sympower.iec60870.iec101.frame.Iec101FrameTestUtils.assertByteEquals;
 import static net.sympower.iec60870.iec101.frame.Iec101FrameTestUtils.getUnsignedByte;
 
-/**
- * Tests for IEC-101 Variable Length Frame format compliance.
- * 
- * Variable Frame Format (IEC 60870-5-101 specification):
- * <table>
- * <tr><th>Offset</th><th>Field</th><th>Size</th><th>Description</th></tr>
- * <tr><td>0</td><td>Start</td><td>1 byte</td><td>Always 0x68</td></tr>
- * <tr><td>1</td><td>Length</td><td>1 byte</td><td>Number of bytes from control to checksum</td></tr>
- * <tr><td>2</td><td>Length (repeat)</td><td>1 byte</td><td>Same as above (for reliability)</td></tr>
- * <tr><td>3</td><td>Start (repeat)</td><td>1 byte</td><td>Always 0x68</td></tr>
- * <tr><td>4</td><td>Control</td><td>1 byte</td><td>Control field bitfield</td></tr>
- * <tr><td>5</td><td>Link Address</td><td>1-2 bytes</td><td>Device address (we use 1 byte)</td></tr>
- * <tr><td>6+</td><td>ASDU</td><td>Variable</td><td>Application data</td></tr>
- * <tr><td>N-2</td><td>Checksum</td><td>1 byte</td><td>8-bit sum of all bytes except start/stop</td></tr>
- * <tr><td>N-1</td><td>Stop</td><td>1 byte</td><td>Always 0x16</td></tr>
- * </table>
- */
 public class Iec101VariableFrameFormatTest {
 
     private static final IEC60870Settings SETTINGS = new IEC60870Settings();
@@ -97,7 +80,6 @@ public class Iec101VariableFrameFormatTest {
     private static final int TEST_IOA_2 = 5000;
     private static final int TEST_IOA_3 = 8000;
     private static final int CHECKSUM_POSITION_OFFSET = 2;
-    private static final int CHECKSUM_INCLUSION_OFFSET = 1;
 
     @Test
     public void testVariableFrameFormat_PrimaryFrameWithInterrogationAsdu() {
@@ -193,14 +175,14 @@ public class Iec101VariableFrameFormatTest {
 
     private static Iec101VariableFrame givenSecondaryFrameWithMinimalAsdu(int linkAddress, boolean acd, boolean dfc) {
         ASdu asdu = new ASdu(
-            ASduType.C_TS_NA_1, // Test command (minimal)
+            ASduType.C_TS_NA_1,
             false,
             CauseOfTransmission.ACTIVATION,
             false, false,
             DEFAULT_ORIGINATOR_ADDRESS,
             DEFAULT_COMMON_ADDRESS,
             new InformationObject[] {
-                new InformationObject(TEST_IOA_1) // No information elements
+                new InformationObject(TEST_IOA_1)
             }
         );
 
@@ -218,7 +200,7 @@ public class Iec101VariableFrameFormatTest {
 
     private static Iec101VariableFrame givenFrameWithSingleCommandAsdu(int linkAddress, boolean fcv, boolean fcb) {
         ASdu asdu = new ASdu(
-            ASduType.C_SC_NA_1, // Single command
+            ASduType.C_SC_NA_1,
             false,
             CauseOfTransmission.ACTIVATION,
             false, false,
@@ -241,7 +223,7 @@ public class Iec101VariableFrameFormatTest {
 
     private static Iec101VariableFrame givenFrameWithDoubleCommandAsdu(int linkAddress, boolean fcv, boolean fcb) {
         ASdu asdu = new ASdu(
-            ASduType.C_DC_NA_1, // Double command
+            ASduType.C_DC_NA_1,
             false,
             CauseOfTransmission.ACTIVATION,
             false, false,
@@ -318,12 +300,8 @@ public class Iec101VariableFrameFormatTest {
 
     private static void thenFrameHasCorrectLengthField(byte[] frame) {
         int lengthField = getUnsignedByte(frame, VARIABLE_FRAME_LENGTH_1_BYTE_POSITION);
-        // Length field represents bytes from control to checksum (inclusive)
-        // Frame structure: START(1) + LENGTH(1) + LENGTH(1) + START(1) + [DATA] + END(1)
-        // [DATA] = CONTROL(1) + ADDRESS(1) + ASDU(n) + CHECKSUM(1)
-        int dataStartPosition = VARIABLE_FRAME_CONTROL_BYTE_POSITION;
-        int checksumPosition = frame.length - CHECKSUM_POSITION_OFFSET; // Before end byte
-        int actualDataLength = checksumPosition - dataStartPosition + CHECKSUM_INCLUSION_OFFSET; // Include checksum
+        int checksumPosition = frame.length - CHECKSUM_POSITION_OFFSET;
+        int actualDataLength = checksumPosition - VARIABLE_FRAME_CONTROL_BYTE_POSITION;
         
         assertEquals("Length field should match control to checksum bytes", actualDataLength, lengthField);
     }
@@ -357,7 +335,7 @@ public class Iec101VariableFrameFormatTest {
     private static void thenLengthFieldMatchesActualDataLength(byte[] frame) {
         int lengthField = frame[VARIABLE_FRAME_LENGTH_1_BYTE_POSITION] & BYTE_TO_UNSIGNED_MASK;
         int totalFrameLength = frame.length;
-        int expectedDataLength = totalFrameLength - VARIABLE_FRAME_HEADER_SIZE - CHECKSUM_INCLUSION_OFFSET;
+        int expectedDataLength = totalFrameLength - VARIABLE_FRAME_HEADER_SIZE - 2;
         
         assertEquals("Length field should match actual data length", expectedDataLength, lengthField);
     }
@@ -365,10 +343,9 @@ public class Iec101VariableFrameFormatTest {
     private static void thenLengthFieldCoversControlToChecksum(byte[] frame) {
         int lengthField = frame[VARIABLE_FRAME_LENGTH_1_BYTE_POSITION] & BYTE_TO_UNSIGNED_MASK;
         int checksumPosition = frame.length - CHECKSUM_POSITION_OFFSET;
-        int actualDataLength = checksumPosition - VARIABLE_FRAME_CONTROL_BYTE_POSITION + CHECKSUM_INCLUSION_OFFSET;
+        int actualDataLength = checksumPosition - VARIABLE_FRAME_CONTROL_BYTE_POSITION;
         
-        assertEquals("Length should cover control to checksum inclusive", 
-                    actualDataLength, lengthField);
+        assertEquals("Length should cover control to checksum inclusive", actualDataLength, lengthField);
     }
 
     private static void thenLengthFieldsAreIdentical(byte[] frame) {
@@ -388,8 +365,7 @@ public class Iec101VariableFrameFormatTest {
         }
         int expectedChecksum = manualSum & BYTE_TO_UNSIGNED_MASK;
         
-        assertEquals("Checksum should be 8-bit sum excluding start/stop bytes", 
-                    expectedChecksum, actualChecksum);
+        assertEquals("Checksum should be 8-bit sum excluding start/stop bytes", expectedChecksum, actualChecksum);
     }
 
 }

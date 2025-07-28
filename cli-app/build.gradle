@@ -16,7 +16,8 @@ dependencies {
     implementation project(":")
     
     implementation 'com.fazecast:jSerialComm:[2.0.0,3.0.0)'
-    
+
+    implementation("ch.qos.logback:logback-classic:1.5.18")
     implementation 'javax.xml.bind:jaxb-api:2.3.1'
     implementation 'org.glassfish.jaxb:jaxb-runtime:2.3.1'
 }

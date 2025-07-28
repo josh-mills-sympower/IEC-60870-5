@@ -25,17 +25,10 @@ package net.sympower.iec60870.common.api;
 
 import net.sympower.iec60870.common.ASdu;
 import net.sympower.iec60870.common.CauseOfTransmission;
-import net.sympower.iec60870.common.IEC60870Settings;
 import net.sympower.iec60870.common.IEC60870Protocol;
-import net.sympower.iec60870.common.elements.IeAckFileOrSectionQualifier;
+import net.sympower.iec60870.common.IEC60870Settings;
 import net.sympower.iec60870.common.elements.IeBinaryStateInformation;
-import net.sympower.iec60870.common.elements.IeChecksum;
 import net.sympower.iec60870.common.elements.IeDoubleCommand;
-import net.sympower.iec60870.common.elements.IeFileReadyQualifier;
-import net.sympower.iec60870.common.elements.IeFileSegment;
-import net.sympower.iec60870.common.elements.IeLengthOfFileOrSection;
-import net.sympower.iec60870.common.elements.IeNameOfFile;
-import net.sympower.iec60870.common.elements.IeNameOfSection;
 import net.sympower.iec60870.common.elements.IeNormalizedValue;
 import net.sympower.iec60870.common.elements.IeQualifierOfCounterInterrogation;
 import net.sympower.iec60870.common.elements.IeQualifierOfInterrogation;
@@ -43,16 +36,14 @@ import net.sympower.iec60870.common.elements.IeQualifierOfParameterOfMeasuredVal
 import net.sympower.iec60870.common.elements.IeQualifierOfSetPointCommand;
 import net.sympower.iec60870.common.elements.IeRegulatingStepCommand;
 import net.sympower.iec60870.common.elements.IeScaledValue;
-import net.sympower.iec60870.common.elements.IeSectionReadyQualifier;
 import net.sympower.iec60870.common.elements.IeShortFloat;
 import net.sympower.iec60870.common.elements.IeSingleCommand;
 import net.sympower.iec60870.common.elements.IeTestSequenceCounter;
 import net.sympower.iec60870.common.elements.IeTime56;
-import net.sympower.iec60870.common.elements.InformationElement;
+
 import java.io.DataInputStream;
 import java.io.DataOutputStream;
 import java.io.IOException;
-import java.util.Collection;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -116,7 +107,11 @@ public abstract class IEC60870Connection {
 
     
     public void sendConfirmation(ASdu asdu) throws IOException {
-        send(IEC60870Protocol.createConfirmation(asdu, originatorAddress));
+        send(IEC60870Protocol.createConfirmation(asdu, asdu.getOriginatorAddress()));
+    }
+    
+    public void sendTermination(ASdu asdu) throws IOException {
+        send(IEC60870Protocol.createTermination(asdu, asdu.getOriginatorAddress()));
     }
 
     protected abstract void performClose() throws IOException;

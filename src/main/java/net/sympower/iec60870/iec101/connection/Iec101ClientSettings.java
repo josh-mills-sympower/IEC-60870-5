@@ -31,6 +31,7 @@ public class Iec101ClientSettings extends IEC60870Settings {
     private long ackTimeoutMs = 200;
     private long initializationTimeoutMs = 5000;
     private long handshakePollIntervalMs = 1000;
+    private long pollingIntervalMs = 1000;
 
     public Iec101ClientSettings() {
         super();
@@ -67,5 +68,13 @@ public class Iec101ClientSettings extends IEC60870Settings {
 
     public void setHandshakePollIntervalMs(long handshakePollIntervalMs) {
         this.handshakePollIntervalMs = handshakePollIntervalMs;
+    }
+    
+    public long getPollingIntervalMs() {
+        return pollingIntervalMs;
+    }
+    
+    public void setPollingIntervalMs(long pollingIntervalMs) {
+        this.pollingIntervalMs = pollingIntervalMs;
     }
 }

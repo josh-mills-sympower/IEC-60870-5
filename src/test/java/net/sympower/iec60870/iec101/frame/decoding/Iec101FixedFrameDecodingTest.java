@@ -23,23 +23,50 @@
  */
 package net.sympower.iec60870.iec101.frame.decoding;
 
-import org.junit.Test;
 import net.sympower.iec60870.common.IEC60870Settings;
+import net.sympower.iec60870.iec101.frame.BitUtils;
 import net.sympower.iec60870.iec101.frame.Iec101FixedFrame;
 import net.sympower.iec60870.iec101.frame.Iec101Frame.FunctionCode;
+import org.junit.Test;
 
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
 
+import static net.sympower.iec60870.iec101.frame.Iec101FrameTestUtils.ACD_CLEAR;
+import static net.sympower.iec60870.iec101.frame.Iec101FrameTestUtils.ACD_SET;
+import static net.sympower.iec60870.iec101.frame.Iec101FrameTestUtils.DEFAULT_LINK_ADDRESS;
+import static net.sympower.iec60870.iec101.frame.Iec101FrameTestUtils.DEFAULT_SETTINGS;
+import static net.sympower.iec60870.iec101.frame.Iec101FrameTestUtils.DFC_CLEAR;
+import static net.sympower.iec60870.iec101.frame.Iec101FrameTestUtils.END_FRAME;
+import static net.sympower.iec60870.iec101.frame.Iec101FrameTestUtils.FCB_ACD_BIT_POS;
+import static net.sympower.iec60870.iec101.frame.Iec101FrameTestUtils.FCB_CLEAR;
+import static net.sympower.iec60870.iec101.frame.Iec101FrameTestUtils.FCB_SET;
+import static net.sympower.iec60870.iec101.frame.Iec101FrameTestUtils.FCV_DFC_BIT_POS;
+import static net.sympower.iec60870.iec101.frame.Iec101FrameTestUtils.FCV_DISABLED;
+import static net.sympower.iec60870.iec101.frame.Iec101FrameTestUtils.FCV_ENABLED;
+import static net.sympower.iec60870.iec101.frame.Iec101FrameTestUtils.FIXED_FRAME_CONTROL_BYTE_POSITION;
+import static net.sympower.iec60870.iec101.frame.Iec101FrameTestUtils.FUNCTION_CODE_MASK;
+import static net.sympower.iec60870.iec101.frame.Iec101FrameTestUtils.PRM_BIT_POS;
+import static net.sympower.iec60870.iec101.frame.Iec101FrameTestUtils.START_FIXED_FRAME;
+import static net.sympower.iec60870.iec101.frame.Iec101FrameTestUtils.TEST_ADDRESS_1;
+import static net.sympower.iec60870.iec101.frame.Iec101FrameTestUtils.TEST_ADDRESS_2;
+import static net.sympower.iec60870.iec101.frame.Iec101FrameTestUtils.getBit;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
-import static net.sympower.iec60870.iec101.frame.Iec101FrameTestUtils.*;
 
 public class Iec101FixedFrameDecodingTest {
 
     private static final IEC60870Settings SETTINGS = DEFAULT_SETTINGS;
+    
+    private static byte calculateChecksum(byte[] data) {
+        int sum = 0;
+        for (byte b : data) {
+            sum += b & 0xFF;
+        }
+        return (byte) (sum & 0xFF);
+    }
 
     @Test
     public void testDecodeFixedFrame_PrimaryStationUserDataConfirmed() throws IOException {
@@ -109,10 +136,10 @@ public class Iec101FixedFrameDecodingTest {
     @Test
     public void testDecodeFixedFrame_AllSecondaryFunctionCodes() throws IOException {
         FunctionCode[] secondaryFunctions = {
-            FunctionCode.ACK_CONFIRM,
+            FunctionCode.USER_DATA_RESPONSE,
             FunctionCode.NACK_MESSAGE,
             FunctionCode.STATUS_LINK_ACCESS_DEMAND,
-            FunctionCode.STATUS_LINK_NO_DATA,
+            FunctionCode.RESP_NACK_NO_DATA,
             FunctionCode.NACK_NOT_FUNCTIONING,
             FunctionCode.NACK_NOT_IMPLEMENTED
         };
@@ -133,52 +160,101 @@ public class Iec101FixedFrameDecodingTest {
 
     private static byte[] givenPrimaryFixedFrame(int address, boolean fcb, boolean fcv, FunctionCode functionCode) {
         byte control = (byte) (0x40 | (fcb ? 0x20 : 0) | (fcv ? 0x10 : 0) | functionCode.getCode());
-        byte checksum = (byte) ((control + address) & 0xFF);
+        int addressLength = SETTINGS.getLinkAddressLength();
+        byte[] addressBytes = new byte[addressLength];
+        BitUtils.writeBytes(addressBytes, 0, address, addressLength);
         
-        return new byte[] {
-            START_FIXED_FRAME,
-            control,
-            (byte) address,
-            checksum,
-            END_FRAME
-        };
+        // Calculate checksum over control + address bytes
+        byte[] checksumData = new byte[1 + addressLength];
+        checksumData[0] = control;
+        System.arraycopy(addressBytes, 0, checksumData, 1, addressLength);
+        byte checksum = calculateChecksum(checksumData);
+        
+        // Build frame
+        byte[] frame = new byte[5 + addressLength - 1]; // Start + control + address + checksum + end
+        int pos = 0;
+        frame[pos++] = START_FIXED_FRAME;
+        frame[pos++] = control;
+        System.arraycopy(addressBytes, 0, frame, pos, addressLength);
+        pos += addressLength;
+        frame[pos++] = checksum;
+        frame[pos++] = END_FRAME;
+        
+        return frame;
     }
 
     private static byte[] givenSecondaryFixedFrame(int address, boolean acd, boolean dfc, FunctionCode functionCode) {
         byte control = (byte) ((acd ? 0x20 : 0) | (dfc ? 0x10 : 0) | functionCode.getCode());
-        byte checksum = (byte) ((control + address) & 0xFF);
+        int addressLength = SETTINGS.getLinkAddressLength();
+        byte[] addressBytes = new byte[addressLength];
+        BitUtils.writeBytes(addressBytes, 0, address, addressLength);
         
-        return new byte[] {
-            START_FIXED_FRAME,
-            control,
-            (byte) address,
-            checksum,
-            END_FRAME
-        };
+        // Calculate checksum over control + address bytes
+        byte[] checksumData = new byte[1 + addressLength];
+        checksumData[0] = control;
+        System.arraycopy(addressBytes, 0, checksumData, 1, addressLength);
+        byte checksum = calculateChecksum(checksumData);
+        
+        // Build frame
+        byte[] frame = new byte[5 + addressLength - 1]; // Start + control + address + checksum + end
+        int pos = 0;
+        frame[pos++] = START_FIXED_FRAME;
+        frame[pos++] = control;
+        System.arraycopy(addressBytes, 0, frame, pos, addressLength);
+        pos += addressLength;
+        frame[pos++] = checksum;
+        frame[pos++] = END_FRAME;
+        
+        return frame;
     }
 
     private static byte[] givenFixedFrameWithInvalidChecksum() {
-        return new byte[] {
-            START_FIXED_FRAME,
-            0x43,
-            0x55,
-            (byte) 0x99,
-            END_FRAME
-        };
+        byte control = 0x43;
+        int address = 0x55;
+        int addressLength = SETTINGS.getLinkAddressLength();
+        byte[] addressBytes = new byte[addressLength];
+        BitUtils.writeBytes(addressBytes, 0, address, addressLength);
+        
+        // Use invalid checksum
+        byte invalidChecksum = (byte) 0x99;
+        
+        // Build frame
+        byte[] frame = new byte[5 + addressLength - 1];
+        int pos = 0;
+        frame[pos++] = START_FIXED_FRAME;
+        frame[pos++] = control;
+        System.arraycopy(addressBytes, 0, frame, pos, addressLength);
+        pos += addressLength;
+        frame[pos++] = invalidChecksum;
+        frame[pos++] = END_FRAME;
+        
+        return frame;
     }
 
     private static byte[] givenFixedFrameWithInvalidEndByte() {
         byte control = 0x43;
-        byte address = 0x55;
-        byte checksum = (byte) ((control + address) & 0xFF);
+        int address = 0x55;
+        int addressLength = SETTINGS.getLinkAddressLength();
+        byte[] addressBytes = new byte[addressLength];
+        BitUtils.writeBytes(addressBytes, 0, address, addressLength);
         
-        return new byte[] {
-            START_FIXED_FRAME,
-            control,
-            address,
-            checksum,
-            0x17
-        };
+        // Calculate checksum over control + address bytes
+        byte[] checksumData = new byte[1 + addressLength];
+        checksumData[0] = control;
+        System.arraycopy(addressBytes, 0, checksumData, 1, addressLength);
+        byte checksum = calculateChecksum(checksumData);
+        
+        // Build frame with invalid end byte
+        byte[] frame = new byte[5 + addressLength - 1];
+        int pos = 0;
+        frame[pos++] = START_FIXED_FRAME;
+        frame[pos++] = control;
+        System.arraycopy(addressBytes, 0, frame, pos, addressLength);
+        pos += addressLength;
+        frame[pos++] = checksum;
+        frame[pos++] = 0x17; // Invalid end byte
+        
+        return frame;
     }
 
     private static Iec101FixedFrame whenFixedFrameIsDecoded(byte[] frameBytes) throws IOException {
@@ -209,7 +285,11 @@ public class Iec101FixedFrameDecodingTest {
     }
 
     private static void thenDecodedFrameHasCorrectLinkAddress(Iec101FixedFrame decodedFrame, byte[] originalFrameBytes) {
-        int expectedAddress = getUnsignedByte(originalFrameBytes, FIXED_FRAME_ADDRESS_BYTE_POSITION);
+        // Extract address from frame based on address length
+        int addressLength = SETTINGS.getLinkAddressLength();
+        byte[] addressBytes = new byte[addressLength];
+        System.arraycopy(originalFrameBytes, 2, addressBytes, 0, addressLength); // Address starts at position 2
+        int expectedAddress = BitUtils.readBytes(addressBytes, 0, addressLength);
         assertEquals("Decoded link address should match original frame", expectedAddress, decodedFrame.getLinkAddress());
     }
 

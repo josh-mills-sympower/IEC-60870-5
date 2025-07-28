@@ -268,10 +268,7 @@ This library implements **unbalanced mode only**:
 
 - **Controlling station** initiates all communication and never sends ACK/NACK
 - **Controlled station** only responds to requests and sends ACK/NACK for received frames
-- Half-duplex serial communication
-- Master-slave relationship maintained throughout session
-- All timing and flow control managed by controlling station
-- Link layer acknowledgments flow only from controlled station to controlling station
+- **Controlled station** queues responses and data for the **controlling station** to poll
 
 **Balanced mode (where both stations can initiate communication) is not currently supported.**
 
@@ -344,27 +341,91 @@ Indicates why the ASDU was transmitted:
 - **REQUEST**: Requested data
 - **BACKGROUND_SCAN**: Background scan
 
-### Typical Application Data Exchange
+### Typical Data Exchange Flow
+
+The IEC-101 implementation uses automatic polling where the client continuously polls the server for Class 1 (high priority) and Class 2 (normal priority) data. The server uses the ACD (Access Demand) bit to signal when Class 1 data is available, which is requested immediately by the client when detected.
+
+#### Example 1: Idle Connection - Normal Polling Behavior
 
 ```
 Controlling Station                    Controlled Station
        │                                      │
-       │ ──── INTERROGATION ────────────────► │
+       │ ──── REQUEST CLASS 1 DATA ─────────► │
+       │      (Function Code 10, FCB=0)       │
+       │                                      │
+       │ ◄──── RESP_NACK_NO_DATA ────────────── │
+       │      (Function Code 9, ACD=0)        │
+       │                                      │
+       │ ──── REQUEST CLASS 2 DATA ─────────► │
+       │      (Function Code 11, FCB=1)       │
+       │                                      │
+       │ ◄──── RESP_NACK_NO_DATA ────────────── │
+       │      (Function Code 9, ACD=0)        │
+       │                                      │
+       │ ──── REQUEST CLASS 1 DATA ─────────► │
+       │      (Function Code 10, FCB=0)       │
+       │                                      │
+       │      ... alternating polling continues ...
+```
+
+#### Example 2: Interrogation Command with Automatic Response Retrieval
+
+```
+Controlling Station                    Controlled Station
+       │                                      │
+       │ ──── INTERROGATION COMMAND ────────► │
        │      (C_IC_NA_1, FCB=0, FCV=1)      │
        │                                      │
+       │ ◄──── ACK (E5h) ─────────────────────── │
        │                                      │
-       │ ◄──── MEASUREMENT DATA ────────────── │
-       │      (M_ME_NB_1, USER_DATA_NO_REPLY) │
+       │  (Server queues: Confirmation + Data + Termination)
        │                                      │
-       │    (NO ACK sent by controlling station) │
+       │ ──── REQUEST CLASS 1 DATA ─────────► │ ◄─ Automatic polling
+       │      (Function Code 10, FCB=1)       │
+       │                                      │
+       │ ◄──── CONFIRMATION ─────────────────── │
+       │      (C_IC_NA_1, ACTIVATION_CON, ACD=1) │
+       │                                      │
+       │ ──── REQUEST CLASS 2 DATA ─────────► │ ◄─ Automatic polling  
+       │      (Function Code 11, FCB=0)       │
+       │                                      │
+       │ ◄──── SINGLE POINT DATA ────────────── │
+       │      (M_SP_NA_1, ACD=1)              │
+       │                                      │
+       │ ──── REQUEST CLASS 2 DATA ─────────► │
+       │      (Function Code 11, FCB=1)       │
+       │                                      │
+       │ ◄──── MEASUREMENT DATA ─────────────── │
+       │      (M_ME_NB_1, ACD=1)              │
+       │                                      │
+       │ ──── REQUEST CLASS 1 DATA ─────────► │ ◄─ ACD=1 triggers immediate polling
+       │      (Function Code 10, FCB=0)       │
+       │                                      │
+       │ ◄──── TERMINATION ──────────────────── │
+       │      (C_IC_NA_1, ACTIVATION_TERM, ACD=0) │
+       │                                      │
+       │      ... normal alternating polling resumes ...
+```
+
+#### Example 3: Single Command with Immediate Response via Polling
+
+```
+Controlling Station                    Controlled Station
        │                                      │
        │ ──── SINGLE COMMAND ───────────────► │
-       │      (C_SC_NA_1, FCB=1, FCV=1)      │
+       │      (C_SC_NA_1, FCB=0, FCV=1)      │
+       │                                      │
+       │ ◄──── ACK (E5h) ─────────────────────── │
+       │                                      │
+       │  (Server queues Class 1 confirmation, sets ACD=1)
+       │                                      │
+       │ ──── REQUEST CLASS 1 DATA ─────────► │ ◄─ Automatic polling detects ACD=1
+       │      (Function Code 10, FCB=1)       │
        │                                      │
        │ ◄──── COMMAND CONFIRMATION ───────── │
-       │      (C_SC_NA_1, ACTIVATION_CON)    │
+       │      (C_SC_NA_1, ACTIVATION_CON, ACD=0) │
        │                                      │
-       │                                      │
+       │      ... normal alternating polling resumes ...
 ```
 
 ### Time Tagging
@@ -394,9 +455,7 @@ This implementation has several limitations compared to the full IEC 60870-5-101
 - **Limited ASDU types**: Not all ASDU data types defined in the standard are implemented - only the most commonly used types for basic SCADA operations. File transfer operations (ASDU types 120-126) are not supported
 
 ### Link Layer Limitations  
-- **Access Demand (ACD) bit**: Not dynamically managed based on controlled station buffer status (defaults to false)
 - **Data Flow Control (DFC) bit**: Basic implementation without advanced flow control mechanisms
-- **Class 1/Class 2 data requests**: No support for priority-based data classification. Hard-coded ACK response from server.
 - **Single connection per server**: Each server instance can handle only one client connection at a time
 - **Serial communication only**: Implementation is coupled to serial communication via jSerialComm library
 

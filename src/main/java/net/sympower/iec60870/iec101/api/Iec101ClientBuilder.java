@@ -23,14 +23,14 @@
  */
 package net.sympower.iec60870.iec101.api;
 
-import java.io.IOException;
-import java.io.DataInputStream;
-import java.io.DataOutputStream;
-
 import com.fazecast.jSerialComm.SerialPort;
 import net.sympower.iec60870.common.IEC60870Settings;
 import net.sympower.iec60870.iec101.connection.Iec101ClientConnection;
 import net.sympower.iec60870.iec101.connection.Iec101ClientSettings;
+
+import java.io.DataInputStream;
+import java.io.DataOutputStream;
+import java.io.IOException;
 
 public class Iec101ClientBuilder {
 
@@ -40,9 +40,10 @@ public class Iec101ClientBuilder {
     private int dataBits = 8;
     private int stopBits = SerialPort.ONE_STOP_BIT;
     private int parity = SerialPort.NO_PARITY;
-    private int messageFragmentTimeout = 300000; // 5 minutes instead of 5 seconds
+    private int messageFragmentTimeout = 3000;
     
     private int linkAddress = 1; // Link address for IEC-101
+    private int linkAddressLength = 2; // Link address length (1-2 bytes)
     private int cotFieldLength = 2; // Cause of Transmission field length (1 or 2 bytes)
     private int ioaFieldLength = 3; // Information Object Address field length (1, 2, or 3 bytes)
 
@@ -52,6 +53,9 @@ public class Iec101ClientBuilder {
     private long ackTimeoutMs = 5000; // Increased from 200ms to 5 seconds
     private long initializationTimeoutMs = 30000; // Increased from 5 to 30 seconds
     private long handshakePollIntervalMs = 1000;
+    private int interFrameDelayMs = 0;
+    
+    private long pollingIntervalMs = 1000;
 
     public Iec101ClientBuilder(String portName) {
         this.portName = portName;
@@ -89,6 +93,14 @@ public class Iec101ClientBuilder {
 
     public Iec101ClientBuilder linkAddress(int linkAddress) {
         this.linkAddress = linkAddress;
+        return this;
+    }
+
+    public Iec101ClientBuilder linkAddressLength(int linkAddressLength) {
+        if (linkAddressLength < 1 || linkAddressLength > 2) {
+            throw new IllegalArgumentException("Link address length must be 1 or 2 bytes");
+        }
+        this.linkAddressLength = linkAddressLength;
         return this;
     }
 
@@ -140,6 +152,22 @@ public class Iec101ClientBuilder {
         return this;
     }
 
+    public Iec101ClientBuilder interFrameDelayMs(int interFrameDelayMs) {
+        if (interFrameDelayMs < 0) {
+            throw new IllegalArgumentException("Inter-frame delay must be non-negative");
+        }
+        this.interFrameDelayMs = interFrameDelayMs;
+        return this;
+    }
+    
+    public Iec101ClientBuilder pollingIntervalMs(long pollingIntervalMs) {
+        if (pollingIntervalMs <= 0) {
+            throw new IllegalArgumentException("Polling interval must be positive");
+        }
+        this.pollingIntervalMs = pollingIntervalMs;
+        return this;
+    }
+
 
     public Iec101ClientConnection build() throws IOException {
         SerialPort serialPort = openSerialPort();
@@ -173,6 +201,8 @@ public class Iec101ClientBuilder {
         settings.setMessageFragmentTimeout(messageFragmentTimeout);
         settings.setCotFieldLength(cotFieldLength);
         settings.setIoaFieldLength(ioaFieldLength);
+        settings.setLinkAddressLength(linkAddressLength);
+        settings.setInterFrameDelayMs(interFrameDelayMs);
         return settings;
     }
     
@@ -182,6 +212,7 @@ public class Iec101ClientBuilder {
         clientSettings.setAckTimeoutMs(ackTimeoutMs);
         clientSettings.setInitializationTimeoutMs(initializationTimeoutMs);
         clientSettings.setHandshakePollIntervalMs(handshakePollIntervalMs);
+        clientSettings.setPollingIntervalMs(pollingIntervalMs);
         return clientSettings;
     }
     

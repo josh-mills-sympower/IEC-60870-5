@@ -72,12 +72,12 @@ public class Iec101FixedFrame extends Iec101Frame {
 
     public static Iec101FixedFrame decode(InputStream inputStream, IEC60870Settings settings) throws IOException {
         int controlField = readControlField(inputStream);
-        int addressField = readAddressField(inputStream);
+        int addressField = readAddressField(inputStream, settings);
         int checksum = readChecksum(inputStream);
         readAndValidateEndCharacter(inputStream);
         
         ControlField controlInfo = readControlFieldBits(controlField);
-        verifyChecksum(controlField, addressField, checksum);
+        verifyChecksum(controlField, addressField, checksum, settings);
 
         return new Iec101FixedFrame(addressField, controlInfo.functionCode, controlInfo.prm,
                                     controlInfo.fcv, controlInfo.fcb, controlInfo.acd, controlInfo.dfc);
@@ -91,12 +91,19 @@ public class Iec101FixedFrame extends Iec101Frame {
         return controlField;
     }
     
-    private static int readAddressField(InputStream inputStream) throws IOException {
-        int addressField = inputStream.read();
-        if (addressField == -1) {
-            throw new IOException("Unexpected end of stream reading address field");
+    private static int readAddressField(InputStream inputStream, IEC60870Settings settings) throws IOException {
+        int addressLength = settings.getLinkAddressLength();
+        byte[] addressBytes = new byte[addressLength];
+        
+        for (int i = 0; i < addressLength; i++) {
+            int byteValue = inputStream.read();
+            if (byteValue == -1) {
+                throw new IOException("Unexpected end of stream reading address field");
+            }
+            addressBytes[i] = (byte) byteValue;
         }
-        return addressField;
+        
+        return BitUtils.readBytes(addressBytes, 0, addressLength);
     }
     
     private static int readChecksum(InputStream inputStream) throws IOException {
@@ -140,9 +147,13 @@ public class Iec101FixedFrame extends Iec101Frame {
         return info;
     }
     
-    private static void verifyChecksum(int controlField, int addressField, int actualChecksum) throws IOException {
-        // Checksum is calculated over control field + address field (2 bytes)
-        byte[] frameData = {(byte) controlField, (byte) addressField};
+    private static void verifyChecksum(int controlField, int addressField, int actualChecksum, IEC60870Settings settings) throws IOException {
+        // Checksum is calculated over control field + address field
+        int addressLength = settings.getLinkAddressLength();
+        byte[] frameData = new byte[1 + addressLength];
+        frameData[0] = (byte) controlField;
+        BitUtils.writeBytes(frameData, 1, addressField, addressLength);
+        
         if (!verifyChecksum(frameData, (byte) actualChecksum)) {
             throw new IOException("Invalid checksum in fixed frame");
         }
@@ -163,16 +174,18 @@ public class Iec101FixedFrame extends Iec101Frame {
     @Override
     public int encode(byte[] buffer, IEC60870Settings settings) {
         int pos = 0;
+        int addressLength = settings.getLinkAddressLength();
 
         buffer[pos++] = START_FIXED;
 
         int controlField = encodeControlField();
         buffer[pos++] = (byte) controlField;
 
-        buffer[pos++] = (byte) linkAddress;
+        BitUtils.writeBytes(buffer, pos, linkAddress, addressLength);
+        pos += addressLength;
 
-        // Calculate checksum over control field + address field (bytes 1-2)
-        byte checksum = calculateChecksum(buffer, 1, 2);
+        // Calculate checksum over control field + address field
+        byte checksum = calculateChecksum(buffer, 1, 1 + addressLength);
         buffer[pos++] = checksum;
 
         buffer[pos++] = END_FRAME;

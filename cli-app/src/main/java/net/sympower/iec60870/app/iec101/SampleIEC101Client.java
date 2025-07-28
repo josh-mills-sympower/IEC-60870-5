@@ -30,9 +30,11 @@ public class SampleIEC101Client {
     private static final String SINGLE_COMMAND_EXECUTE = "e";
     private static final String SEND_STOPDT = "p";
     private static final String SEND_STARTDT = "t";
+    
+    private static SampleClientEventListener eventListener;
 
     public static void main(String[] args) throws IOException {
-        String portName = args.length > 0 ? args[0] : "/dev/ttys009";
+        String portName = args.length > 0 ? args[0] : "/dev/ttys007";
         int baudRate = args.length > 1 ? Integer.parseInt(args[1]) : 9600;
         int commonAddress = args.length > 2 ? Integer.parseInt(args[2]) : 1;
 
@@ -44,7 +46,14 @@ public class SampleIEC101Client {
                     .stopBits(1)
                     .parity(1)
                     .commonAddress(commonAddress)
+                    .pollingIntervalMs(500) // Poll every 500ms - responses arrive automatically
                     .build();
+                    
+            System.out.println("IEC-101 Client configured with:");
+            System.out.println("  Port: " + portName + " @ " + baudRate + " baud");
+            System.out.println("  Common Address: " + commonAddress);
+            System.out.println("  Polling Interval: 500ms (alternating Class 1/2)");
+            System.out.println("  Polling Pattern: Class 1 → Class 2 → Class 1 → Class 2...");
         } catch (IOException e) {
             System.err.println("Failed to open serial port: " + e.getMessage());
             System.err.println("Make sure the port exists and you have permission to access it.");
@@ -52,7 +61,8 @@ public class SampleIEC101Client {
             return;
         }
 
-        connection.startDataTransfer(new SampleClientEventListener());
+        eventListener = new SampleClientEventListener();
+        connection.startDataTransfer(eventListener);
 
         Scanner scanner = new Scanner(System.in);
         String input;
@@ -68,18 +78,26 @@ public class SampleIEC101Client {
                     case INTERROGATION_ACTION_KEY:
                         System.out.println("** Sending general interrogation command.");
                         connection.interrogation(commonAddress, CauseOfTransmission.ACTIVATION, new IeQualifierOfInterrogation(20));
+                        eventListener.onCommandSent("Interrogation Command");
+                        System.out.println("   → Responses will arrive automatically via periodic polling");
                         break;
                     case CLOCK_SYNC_ACTION_KEY:
                         System.out.println("** Sending synchronize clocks command.");
                         connection.synchronizeClocks(commonAddress, new IeTime56(System.currentTimeMillis()));
+                        eventListener.onCommandSent("Clock Synchronization Command");
+                        System.out.println("   → Responses will arrive automatically via periodic polling");
                         break;
                     case SINGLE_COMMAND_SELECT:
                         System.out.println("** Sending single command select.");
                         connection.singleCommand(commonAddress, CauseOfTransmission.ACTIVATION, 5000, new IeSingleCommand(true, 0, true));
+                        eventListener.onCommandSent("Single Command (Select)");
+                        System.out.println("   → Responses will arrive automatically via periodic polling");
                         break;
                     case SINGLE_COMMAND_EXECUTE:
                         System.out.println("** Sending single command execute.");
                         connection.singleCommand(commonAddress, CauseOfTransmission.ACTIVATION, 5000, new IeSingleCommand(true, 0, false));
+                        eventListener.onCommandSent("Single Command (Execute)");
+                        System.out.println("   → Responses will arrive automatically via periodic polling");
                         break;
                     case SEND_STOPDT:
                         System.out.println("** Sending STOPDT");
@@ -87,7 +105,8 @@ public class SampleIEC101Client {
                         break;
                     case SEND_STARTDT:
                         System.out.println("** Sending STARTDT");
-                        connection.startDataTransfer(new SampleClientEventListener());
+                        eventListener = new SampleClientEventListener();
+                        connection.startDataTransfer(eventListener);
                         break;
                     default:
                         System.out.println("Unknown command: " + input);
@@ -114,14 +133,22 @@ public class SampleIEC101Client {
     }
 
     private static void printMenu() {
-        System.out.println("\nAvailable commands:");
+        System.out.println("\n" + "=".repeat(60));
+        System.out.println("IEC-101 Sample Client - Available commands:");
+        System.out.println("=".repeat(60));
+        System.out.println("Commands (responses arrive automatically):");
         System.out.println("  i - interrogation (C_IC_NA_1)");
         System.out.println("  c - clock synchronization (C_CS_NA_1)");
         System.out.println("  s - single command select (C_SC_NA_1)");
         System.out.println("  e - single command execute (C_SC_NA_1)");
+        System.out.println("");
+        System.out.println("Connection:");
         System.out.println("  p - stop data transfer (STOPDT)");
         System.out.println("  t - start data transfer (STARTDT)");
         System.out.println("  q - quit");
+        System.out.println("");
+        System.out.println("ℹ  Automatic polling - responses arrive continuously!");
+        
         System.out.print("> ");
     }
 
