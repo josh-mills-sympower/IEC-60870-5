@@ -55,16 +55,11 @@ import net.sympower.iec60870.internal.ExtendedDataInputStream;
 public class Iec101VariableFrame extends Iec101Frame {
 
     // Frame structure constants
-    private static final int MIN_VARIABLE_FRAME_LENGTH = 5;
     private static final int MAX_VARIABLE_FRAME_LENGTH = 255;
     private static final int BYTE_TO_UNSIGNED_MASK = 0xFF;
-    private static final int CONTROL_ADDRESS_CHECKSUM_SIZE = 3;
     private static final int END_OF_STREAM = -1;
-    private static final int CONTROL_FIELD_POSITION = 4;
-    private static final int ENCODED_ASDU_START_POSITION = 6;
-    
+
     // Control field bit positions
-    private static final int RESERVED_BIT_POS = 7;
     private static final int PRM_BIT_POS = 6;
     private static final int FCB_ACD_BIT_POS = 5;
     private static final int FCV_DFC_BIT_POS = 4;
@@ -99,11 +94,11 @@ public class Iec101VariableFrame extends Iec101Frame {
         readAndValidateSecondStartCharacter(inputStream);
         
         int controlField = readControlField(inputStream);
-        int addressField = readAddressField(inputStream);
+        int addressField = readAddressField(inputStream, settings);
         
         ControlFieldInfo controlInfo = readControlFieldBits(controlField);
         
-        int asduLength = calculateAsduLength(frameLength);
+        int asduLength = calculateAsduLength(frameLength, settings);
         ASdu asdu = readAsduIfPresent(inputStream, settings, asduLength);
         
         int checksum = readChecksum(inputStream);
@@ -130,7 +125,7 @@ public class Iec101VariableFrame extends Iec101Frame {
             throw new IOException("Length fields don't match: " + length1 + " != " + length2);
         }
 
-        if (length1 < MIN_VARIABLE_FRAME_LENGTH || length1 > MAX_VARIABLE_FRAME_LENGTH) {
+        if (length1 < 3 || length1 > MAX_VARIABLE_FRAME_LENGTH) {
             throw new IOException("Invalid frame length: " + length1);
         }
         
@@ -157,12 +152,19 @@ public class Iec101VariableFrame extends Iec101Frame {
         return controlField;
     }
     
-    private static int readAddressField(InputStream inputStream) throws IOException {
-        int addressField = inputStream.read();
-        if (addressField == END_OF_STREAM) {
-            throw new IOException("Unexpected end of stream reading address field");
+    private static int readAddressField(InputStream inputStream, IEC60870Settings settings) throws IOException {
+        int addressLength = settings.getLinkAddressLength();
+        byte[] addressBytes = new byte[addressLength];
+        
+        for (int i = 0; i < addressLength; i++) {
+            int byteValue = inputStream.read();
+            if (byteValue == END_OF_STREAM) {
+                throw new IOException("Unexpected end of stream reading address field");
+            }
+            addressBytes[i] = (byte) byteValue;
         }
-        return addressField;
+        
+        return BitUtils.readBytes(addressBytes, 0, addressLength);
     }
     
     private static ControlFieldInfo readControlFieldBits(int controlField) {
@@ -197,9 +199,10 @@ public class Iec101VariableFrame extends Iec101Frame {
         return info;
     }
     
-    private static int calculateAsduLength(int frameLength) {
+    private static int calculateAsduLength(int frameLength, IEC60870Settings settings) {
         // ASDU length = total length - control - address - checksum
-        return frameLength - CONTROL_ADDRESS_CHECKSUM_SIZE;
+        int addressLength = settings.getLinkAddressLength();
+        return frameLength - (1 + addressLength + 1); // control + address + checksum
     }
     
     private static ASdu readAsduIfPresent(InputStream inputStream, IEC60870Settings settings, int asduLength) throws IOException {
@@ -221,21 +224,39 @@ public class Iec101VariableFrame extends Iec101Frame {
     private static void verifyChecksum(int controlField, int addressField, ASdu asdu, int asduLength, 
                                       int actualChecksum, IEC60870Settings settings) throws IOException {
         // Reconstruct the frame data to verify checksum
-        byte[] frameData = new byte[CONTROL_ADDRESS_CHECKSUM_SIZE - 1 + asduLength];
+        int addressLength = settings.getLinkAddressLength();
+        byte[] frameData = new byte[1 + addressLength + asduLength];
         frameData[0] = (byte) controlField;
-        frameData[1] = (byte) addressField;
+        BitUtils.writeBytes(frameData, 1, addressField, addressLength);
         
         if (asdu != null && asduLength > 0) {
             // Re-encode ASDU to get raw bytes for checksum
-            byte[] asduBytes = new byte[asduLength];
-            asdu.encode(asduBytes, 0, settings);
-            System.arraycopy(asduBytes, 0, frameData, 2, asduLength);
+            // Allocate extra space to handle potential encoding length mismatch
+            byte[] asduBytes = new byte[asduLength + 10];
+            try {
+                int actualEncodedLength = asdu.encode(asduBytes, 0, settings);
+                
+                if (actualEncodedLength != asduLength) {
+                    
+                    // Create new frameData with actual ASDU length for accurate checksum
+                    byte[] newFrameData = new byte[1 + addressLength + actualEncodedLength];
+                    newFrameData[0] = (byte) controlField;
+                    BitUtils.writeBytes(newFrameData, 1, addressField, addressLength);
+                    System.arraycopy(asduBytes, 0, newFrameData, 1 + addressLength, actualEncodedLength);
+                    frameData = newFrameData;
+                } else {
+                    // Use declared length as normal
+                    System.arraycopy(asduBytes, 0, frameData, 1 + addressLength, asduLength);
+                }
+            } catch (Exception e) {
+                throw e;
+            }
         }
+        
         
         byte expectedChecksum = calculateChecksum(frameData, 0, frameData.length);
         if ((byte) actualChecksum != expectedChecksum) {
-            // Convert signed byte to unsigned int for hex display
-            throw new IOException("Checksum verification failed. Expected: 0x" + 
+            throw new IOException("Checksum verification failed. Expected: 0x" +
                 Integer.toHexString(expectedChecksum & BYTE_TO_UNSIGNED_MASK) + ", got: 0x" + 
                 Integer.toHexString(actualChecksum & BYTE_TO_UNSIGNED_MASK));
         }
@@ -253,7 +274,6 @@ public class Iec101VariableFrame extends Iec101Frame {
         }
     }
     
-    // Helper class to hold parsed control field information
     private static class ControlFieldInfo {
         boolean prm;
         boolean fcb;
@@ -266,15 +286,18 @@ public class Iec101VariableFrame extends Iec101Frame {
     @Override
     public int encode(byte[] buffer, IEC60870Settings settings) {
         int pos = 0;
+        int addressLength = settings.getLinkAddressLength();
 
         // Encode ASDU first to know the length
         int asduLength = 0;
+        int asduStartPos = 4 + 1 + addressLength; // start + length + length + start + control + address
         if (asdu != null) {
-            asduLength = asdu.encode(buffer, ENCODED_ASDU_START_POSITION, settings); // Leave space for header
+            asduLength = asdu.encode(buffer, asduStartPos, settings);
         }
 
-        // Length = control + address + ASDU + checksum (excluding start/stop as per spec)
-        int lengthField = CONTROL_ADDRESS_CHECKSUM_SIZE + asduLength;
+        // Length = control + address + ASDU
+        int lengthField = 1 + addressLength + asduLength;
+        int controlFieldPos = 4;
 
         buffer[pos++] = START_VARIABLE;
 
@@ -286,14 +309,16 @@ public class Iec101VariableFrame extends Iec101Frame {
 
         int controlField = getControlField();
         buffer[pos++] = (byte) controlField;
-        buffer[pos++] = (byte) linkAddress;
+
+        BitUtils.writeBytes(buffer, pos, linkAddress, addressLength);
+        pos += addressLength;
 
         // ASDU is already encoded at the correct position, so skip ahead
         pos += asduLength;
 
-        // Calculate checksum for control + address + ASDU
-        byte checksum = calculateChecksum(buffer, CONTROL_FIELD_POSITION, 
-                                        CONTROL_ADDRESS_CHECKSUM_SIZE - 1 + asduLength);
+        // Calculate checksum for control + address + ASDU 
+        int checksumDataLength = 1 + addressLength + asduLength;
+        byte checksum = calculateChecksum(buffer, controlFieldPos, checksumDataLength);
         buffer[pos++] = checksum;
         buffer[pos++] = END_FRAME;
 

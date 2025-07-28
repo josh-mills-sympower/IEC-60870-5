@@ -11,6 +11,7 @@ package net.sympower.iec60870.app.iec101;
 
 import java.io.IOException;
 
+import com.fazecast.jSerialComm.SerialPort;
 import net.sympower.iec60870.app.common.SampleServerListener;
 import net.sympower.iec60870.iec101.api.Iec101Server;
 import net.sympower.iec60870.iec101.api.Iec101ServerBuilder;
@@ -23,14 +24,15 @@ public class SampleIEC101Server {
     private static final Logger logger = LoggerFactory.getLogger(SampleIEC101Server.class);
 
     public static void main(String[] args) throws IOException {
-        String portName = args.length > 0 ? args[0] : "/dev/ttys006";
+        String portName = args.length > 0 ? args[0] : "/dev/ttys008";
         int baudRate = args.length > 1 ? Integer.parseInt(args[1]) : 9600;
 
         Iec101Server server = new Iec101ServerBuilder(portName)
                 .baudRate(baudRate)
                 .dataBits(8)
                 .stopBits(1)
-                .parity(1) // TODO check this is sensible
+                .linkAddress(2)
+                .parity(SerialPort.EVEN_PARITY)
                 .build();
 
         server.start(new SampleServerListener());

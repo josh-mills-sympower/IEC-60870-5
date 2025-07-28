@@ -42,11 +42,13 @@ import java.io.IOException;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.locks.ReentrantLock;
-
+import java.util.function.BooleanSupplier;
 
 public class Iec101ClientConnection extends IEC60870Connection {
 
@@ -63,6 +65,9 @@ public class Iec101ClientConnection extends IEC60870Connection {
 
     private final int linkAddress;
     private final Iec101ClientSettings clientSettings;
+    private final ScheduledExecutorService pollingExecutor = Executors.newSingleThreadScheduledExecutor();
+    private final AtomicBoolean pollClass1Next = new AtomicBoolean(true);
+    private final AtomicBoolean acdDetected = new AtomicBoolean(false); // ACD (Access Demand) bit state
     
     private final AtomicBoolean linkLayerActive = new AtomicBoolean(false);
     private final Map<Integer, Boolean> fcbPerLink = new ConcurrentHashMap<>();
@@ -88,8 +93,8 @@ public class Iec101ClientConnection extends IEC60870Connection {
     }
 
 
-    public Iec101ClientConnection(DataInputStream inputStream, DataOutputStream outputStream, 
-                                 IEC60870Settings settings, int linkAddress, Iec101ClientSettings clientSettings) {
+    public Iec101ClientConnection(DataInputStream inputStream, DataOutputStream outputStream,
+        IEC60870Settings settings, int linkAddress, Iec101ClientSettings clientSettings) {
         super(inputStream, outputStream, settings);
         this.linkAddress = linkAddress;
         this.clientSettings = clientSettings;
@@ -167,6 +172,16 @@ public class Iec101ClientConnection extends IEC60870Connection {
         releasePendingFrames();
         executor.shutdown();
         
+        pollingExecutor.shutdown();
+        try {
+            if (!pollingExecutor.awaitTermination(5, TimeUnit.SECONDS)) {
+                pollingExecutor.shutdownNow();
+            }
+        } catch (InterruptedException e) {
+            pollingExecutor.shutdownNow();
+            Thread.currentThread().interrupt();
+        }
+        
         try {
             performClose();
         } catch (IOException e) {
@@ -203,6 +218,8 @@ public class Iec101ClientConnection extends IEC60870Connection {
             if (eventListener != null) {
                 eventListener.onConnectionReady();
             }
+            
+            startPeriodicPolling();
             
             logger.info("IEC-101 client connection established successfully");
             
@@ -250,22 +267,24 @@ public class Iec101ClientConnection extends IEC60870Connection {
         return waitForHandshakeEvent(() -> resetConfirmationReceived, () -> resetConfirmationReceived = false);
     }
 
-    private boolean waitForHandshakeEvent(java.util.function.BooleanSupplier condition, Runnable resetAction) {
+    private boolean waitForHandshakeEvent(BooleanSupplier condition, Runnable resetAction) {
         synchronized (handshakeLock) {
-            resetAction.run();
-            try {
-                long startTime = System.currentTimeMillis();
-                while (!condition.getAsBoolean() && !closed.get()) {
-                    handshakeLock.wait(clientSettings.getHandshakePollIntervalMs());
-                    if (System.currentTimeMillis() - startTime > clientSettings.getInitializationTimeoutMs()) {
-                        return false;
+            if (!condition.getAsBoolean()) {
+                resetAction.run();
+                try {
+                    long startTime = System.currentTimeMillis();
+                    while (!condition.getAsBoolean() && !closed.get()) {
+                        handshakeLock.wait(clientSettings.getHandshakePollIntervalMs());
+                        if (System.currentTimeMillis() - startTime > clientSettings.getInitializationTimeoutMs()) {
+                            return false;
+                        }
                     }
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    return false;
                 }
-                return condition.getAsBoolean();
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-                return false;
             }
+            return condition.getAsBoolean();
         }
     }
 
@@ -320,9 +339,18 @@ public class Iec101ClientConnection extends IEC60870Connection {
     }
 
     private void handleFixedFrame(Iec101FixedFrame frame) {
+        boolean acdBit = frame.getAcd();
+        acdDetected.set(acdBit);
+        
+        if (acdBit) {
+            logger.debug("ACD bit set: Class 1 data available - triggering immediate polling");
+            triggerClass1PriorityPolling();
+        }
+        
         switch (frame.getFunctionCode()) {
+            case STATUS_LINK:
             case STATUS_LINK_ACCESS_DEMAND:
-            case STATUS_LINK_NO_DATA:
+            case RESP_NACK_NO_DATA:
                 notifyHandshakeEvent(() -> linkStatusReceived = true);
                 break;
             case RESET_REMOTE_LINK:
@@ -397,7 +425,18 @@ public class Iec101ClientConnection extends IEC60870Connection {
         synchronized (outputStream) {
             outputStream.write(frameData);
             outputStream.flush();
+            
+            try {
+                applyInterFrameDelay();
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new IOException("Inter-frame delay interrupted", e);
+            }
         }
+    }
+
+    private void applyInterFrameDelay() throws InterruptedException {
+        Thread.sleep(settings.getInterFrameDelayMs());
     }
 
     private boolean sendVariableFrameWithRetries(Iec101VariableFrame frame, boolean fcbValue) throws IOException {
@@ -430,11 +469,37 @@ public class Iec101ClientConnection extends IEC60870Connection {
         }
     }
 
-    private void sendFixedFrame(Iec101FixedFrame frame) throws IOException {
+    public void sendFixedFrame(Iec101FixedFrame frame) throws IOException {
         byte[] frameData = encodeFixedFrame(frame);
         logger.debug("Sending fixed frame: {}", frame.getFunctionCode());
         logger.debug("Fixed frame encoded as: {}", BitUtils.bytesToHex(frameData));
         sendRawFrame(frameData);
+    }
+    
+    public void sendRequestClass1Data() throws IOException {
+        Iec101FixedFrame requestFrame = new Iec101FixedFrame(
+            linkAddress,
+            FunctionCode.REQUEST_CLASS_1_DATA,
+            PRIMARY_STATION,
+            FCV_CLEAR, // FCV is not relevant for data request frames
+            FCB_CLEAR, // FCB is not relevant for data request frames
+            ACD_CLEAR, // ACD is not set on client frames
+            DFC_CLEAR  // DFC is not set on client frames
+        );
+        sendFixedFrame(requestFrame);
+    }
+    
+    public void sendRequestClass2Data() throws IOException {
+        Iec101FixedFrame requestFrame = new Iec101FixedFrame(
+            linkAddress,
+            FunctionCode.REQUEST_CLASS_2_DATA,
+            PRIMARY_STATION,
+            FCV_CLEAR, // FCV is not relevant for data request frames
+            FCB_CLEAR, // FCB is not relevant for data request frames
+            ACD_CLEAR, // ACD is not set on client frames
+            DFC_CLEAR  // DFC is not set on client frames
+        );
+        sendFixedFrame(requestFrame);
     }
     
     private void sendVariableFrame(Iec101VariableFrame frame) throws IOException {
@@ -456,5 +521,53 @@ public class Iec101ClientConnection extends IEC60870Connection {
             action.run();
             handshakeLock.notifyAll();
         }
+    }
+    
+    private void startPeriodicPolling() {
+        logger.debug("Starting alternating periodic polling every {}ms", clientSettings.getPollingIntervalMs());
+        
+        pollingExecutor.scheduleWithFixedDelay(() -> {
+            if (!dataTransferStarted.get() || closed.get()) {
+                return;
+            }
+            
+            try {
+                // If ACD bit is set, prioritize Class 1 data polling
+                if (acdDetected.get()) {
+                    logger.debug("ACD priority polling: requesting Class 1 data (ACD=true)");
+                    sendRequestClass1Data();
+                } else {
+                    boolean requestClass1 = pollClass1Next.getAndSet(!pollClass1Next.get());
+                    
+                    if (requestClass1) {
+                        logger.debug("Normal periodic polling: requesting Class 1 data");
+                        sendRequestClass1Data();
+                    } else {
+                        logger.debug("Normal periodic polling: requesting Class 2 data");
+                        sendRequestClass2Data();
+                    }
+                }
+            } catch (Exception e) {
+                logger.debug("Error during periodic polling: {}", e.getMessage());
+            }
+        }, 
+        clientSettings.getPollingIntervalMs(),
+        clientSettings.getPollingIntervalMs(),
+        TimeUnit.MILLISECONDS);
+    }
+    
+    private void triggerClass1PriorityPolling() {
+        if (!dataTransferStarted.get() || closed.get()) {
+            return;
+        }
+        
+        pollingExecutor.submit(() -> {
+            try {
+                logger.debug("ACD immediate polling: requesting Class 1 data");
+                sendRequestClass1Data();
+            } catch (Exception e) {
+                logger.debug("Error during ACD priority polling: {}", e.getMessage());
+            }
+        });
     }
 }

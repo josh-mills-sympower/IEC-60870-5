@@ -23,14 +23,12 @@
  */
 package net.sympower.iec60870.common;
 
-import java.io.IOException;
-import java.text.MessageFormat;
-
-import javax.xml.bind.DatatypeConverter;
-
-import net.sympower.iec60870.common.IEC60870Settings;
 import net.sympower.iec60870.common.elements.InformationObject;
 import net.sympower.iec60870.internal.ExtendedDataInputStream;
+
+import javax.xml.bind.DatatypeConverter;
+import java.io.IOException;
+import java.text.MessageFormat;
 
 /**
  * The application service data unit (ASDU). The ASDU is the payload of the application protocol data unit (APDU). Its
@@ -179,6 +177,7 @@ public class ASdu {
         }
 
         currentByte = is.readUnsignedByte();
+        
         CauseOfTransmission causeOfTransmission = CauseOfTransmission.causeFor(currentByte & 0x3f);
         boolean test = byteHasMask(currentByte, 0x80);
         boolean negativeConfirm = byteHasMask(currentByte, 0x40);
@@ -197,9 +196,10 @@ public class ASdu {
             commonAddress = is.readUnsignedByte();
         }
         else {
-            commonAddress = is.readUnsignedByte() | (is.readUnsignedByte() << 8);
-
-            aSduLength--;
+            int lowByte = is.readUnsignedByte();
+            int highByte = is.readUnsignedByte();
+            commonAddress = lowByte | (highByte << 8);
+            aSduLength -= 2;
         }
 
         InformationObject[] informationObjects;
