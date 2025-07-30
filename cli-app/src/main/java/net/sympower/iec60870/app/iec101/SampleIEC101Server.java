@@ -31,6 +31,7 @@ public class SampleIEC101Server {
                 .baudRate(baudRate)
                 .dataBits(8)
                 .stopBits(1)
+                .linkAddress(2)
                 .parity(SerialPort.EVEN_PARITY)
                 .build();
 

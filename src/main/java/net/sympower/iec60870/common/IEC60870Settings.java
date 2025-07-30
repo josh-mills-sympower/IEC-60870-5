@@ -44,7 +44,7 @@ public class IEC60870Settings {
         this.linkAddressLength = 2;
 
         this.connectionTimeout = 6_000;
-        this.interFrameDelayMs = 0;
+        this.interFrameDelayMs = 250;
     }
 
     public IEC60870Settings(IEC60870Settings settings) {

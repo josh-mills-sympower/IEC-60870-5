@@ -596,4 +596,11 @@ public final class IEC60870Protocol {
                        originalAsdu.isNegativeConfirm(), originatorAddress, 
                        originalAsdu.getCommonAddress(), originalAsdu.getInformationObjects());
     }
+    
+    public static ASdu createTermination(ASdu originalAsdu, int originatorAddress) {
+        return new ASdu(originalAsdu.getTypeIdentification(), originalAsdu.isSequenceOfElements(),
+                       CauseOfTransmission.ACTIVATION_TERMINATION, originalAsdu.isTestFrame(), 
+                       false, originatorAddress, 
+                       originalAsdu.getCommonAddress(), originalAsdu.getInformationObjects());
+    }
 }

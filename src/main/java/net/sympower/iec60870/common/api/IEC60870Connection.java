@@ -109,6 +109,10 @@ public abstract class IEC60870Connection {
     public void sendConfirmation(ASdu asdu) throws IOException {
         send(IEC60870Protocol.createConfirmation(asdu, originatorAddress));
     }
+    
+    public void sendTermination(ASdu asdu) throws IOException {
+        send(IEC60870Protocol.createTermination(asdu, originatorAddress));
+    }
 
     protected abstract void performClose() throws IOException;
 

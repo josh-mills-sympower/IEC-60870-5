@@ -231,10 +231,28 @@ public class Iec101VariableFrame extends Iec101Frame {
         
         if (asdu != null && asduLength > 0) {
             // Re-encode ASDU to get raw bytes for checksum
-            byte[] asduBytes = new byte[asduLength];
-            asdu.encode(asduBytes, 0, settings);
-            System.arraycopy(asduBytes, 0, frameData, 1 + addressLength, asduLength);
+            // Allocate extra space to handle potential encoding length mismatch
+            byte[] asduBytes = new byte[asduLength + 10];
+            try {
+                int actualEncodedLength = asdu.encode(asduBytes, 0, settings);
+                
+                if (actualEncodedLength != asduLength) {
+                    
+                    // Create new frameData with actual ASDU length for accurate checksum
+                    byte[] newFrameData = new byte[1 + addressLength + actualEncodedLength];
+                    newFrameData[0] = (byte) controlField;
+                    BitUtils.writeBytes(newFrameData, 1, addressField, addressLength);
+                    System.arraycopy(asduBytes, 0, newFrameData, 1 + addressLength, actualEncodedLength);
+                    frameData = newFrameData;
+                } else {
+                    // Use declared length as normal
+                    System.arraycopy(asduBytes, 0, frameData, 1 + addressLength, asduLength);
+                }
+            } catch (Exception e) {
+                throw e;
+            }
         }
+        
         
         byte expectedChecksum = calculateChecksum(frameData, 0, frameData.length);
         if ((byte) actualChecksum != expectedChecksum) {
@@ -277,8 +295,8 @@ public class Iec101VariableFrame extends Iec101Frame {
             asduLength = asdu.encode(buffer, asduStartPos, settings);
         }
 
-        // Length = control + address + ASDU + checksum (excluding start/stop as per spec)
-        int lengthField = 1 + addressLength + asduLength + 1;
+        // Length = control + address + ASDU
+        int lengthField = 1 + addressLength + asduLength;
         int controlFieldPos = 4;
 
         buffer[pos++] = START_VARIABLE;
@@ -298,8 +316,9 @@ public class Iec101VariableFrame extends Iec101Frame {
         // ASDU is already encoded at the correct position, so skip ahead
         pos += asduLength;
 
-        // Calculate checksum for control + address + ASDU
-        byte checksum = calculateChecksum(buffer, controlFieldPos, 1 + addressLength + asduLength);
+        // Calculate checksum for control + address + ASDU 
+        int checksumDataLength = 1 + addressLength + asduLength;
+        byte checksum = calculateChecksum(buffer, controlFieldPos, checksumDataLength);
         buffer[pos++] = checksum;
         buffer[pos++] = END_FRAME;
 

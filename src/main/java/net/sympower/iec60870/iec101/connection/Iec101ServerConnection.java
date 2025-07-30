@@ -24,6 +24,7 @@
 package net.sympower.iec60870.iec101.connection;
 
 import net.sympower.iec60870.common.ASdu;
+import net.sympower.iec60870.common.CauseOfTransmission;
 import net.sympower.iec60870.common.IEC60870Settings;
 import net.sympower.iec60870.common.api.IEC60870Connection;
 import net.sympower.iec60870.common.api.IEC60870EventListener;
@@ -236,7 +237,7 @@ public class Iec101ServerConnection extends IEC60870Connection {
     }
 
     private void handleAsdu(ASdu asdu) {
-        logger.debug("Received ASDU: {}", asdu);
+        logger.info("Received ASDU: {}", asdu);
         if (eventListener != null) {
             eventListener.onAsduReceived(asdu);
         }
