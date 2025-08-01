@@ -24,7 +24,6 @@
 package net.sympower.iec60870.iec101.connection;
 
 import net.sympower.iec60870.common.ASdu;
-import net.sympower.iec60870.common.CauseOfTransmission;
 import net.sympower.iec60870.common.IEC60870Settings;
 import net.sympower.iec60870.common.api.IEC60870Connection;
 import net.sympower.iec60870.common.api.IEC60870EventListener;
@@ -40,7 +39,9 @@ import java.io.DataInputStream;
 import java.io.DataOutputStream;
 import java.io.IOException;
 import java.util.Map;
+import java.util.Queue;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 public class Iec101ServerConnection extends IEC60870Connection {
@@ -59,7 +60,10 @@ public class Iec101ServerConnection extends IEC60870Connection {
     private volatile Runnable connectionCloseListener;
     
     private final AtomicBoolean linkLayerActive = new AtomicBoolean(false);
-    private final Map<Integer, Boolean> expectedFcbPerLink = new ConcurrentHashMap<>();
+    // Track the last FCB value received from primary station for frames requiring confirmation
+    private final Map<Integer, Boolean> lastConfirmedFcbPerLink = new ConcurrentHashMap<>();
+    private final Queue<ASdu> pendingClass1Responses = new ConcurrentLinkedQueue<>();
+    private final Queue<ASdu> pendingClass2Responses = new ConcurrentLinkedQueue<>();
 
     public Iec101ServerConnection(
         DataInputStream inputStream, DataOutputStream outputStream,
@@ -196,48 +200,90 @@ public class Iec101ServerConnection extends IEC60870Connection {
     }
 
     private void handleFixedFrame(Iec101FixedFrame frame) {
-        logger.debug("Received function code {}", frame.getFunctionCode());
+        logger.debug("Received {} frame from link {}", frame.getFunctionCode(), frame.getLinkAddress());
+        
+        // Check for duplicate frame ONLY if FCV=1 and this is from primary station
+        if (frame.getFcv() && frame.getPrm() && isDuplicateFixedFrame(frame)) {
+            logger.info("Duplicate fixed frame detected - will not process");
+            return;
+        }
+        
         switch (frame.getFunctionCode()) {
             case RESET_REMOTE_LINK:
                 handleResetRemoteLink(frame);
                 break;
             case TEST_FUNCTION_LINK:
-            case REQUEST_CLASS_1_DATA: // Proper REQUEST_CLASS_DATA handling not supported.
-            case REQUEST_CLASS_2_DATA:
                 sendRespNackNoData();
+                break;
+            case REQUEST_CLASS_1_DATA:
+                handleClass1DataRequest();
+                break;
+            case REQUEST_CLASS_2_DATA:
+                handleClass2DataRequest();
                 break;
             case REQUEST_LINK_STATUS:
                 handleLinkStatusRequest();
                 break;
         }
+        
+        if (frame.getFcv() && frame.getPrm()) {
+            updateFcbAfterConfirmation(frame.getLinkAddress(), frame.getFcb());
+        }
+    }
+    
+    private boolean isDuplicateFixedFrame(Iec101FixedFrame frame) {
+        int linkAddr = frame.getLinkAddress();
+        Boolean lastConfirmedFcb = lastConfirmedFcbPerLink.get(linkAddr);
+        
+        if (lastConfirmedFcb != null && frame.getFcb() == lastConfirmedFcb) {
+            logger.debug("Fixed frame has same FCB as last confirmed frame - may be retransmission");
+            return true;
+        }
+        return false;
+    }
+    
+    private void updateFcbAfterConfirmation(int linkAddress, boolean fcb) {
+        lastConfirmedFcbPerLink.put(linkAddress, fcb);
+        logger.debug("Updated FCB tracking for link {} to {} after sending confirmation", linkAddress, fcb);
     }
 
     private void handleVariableFrame(Iec101VariableFrame frame) {
-        if (frame.getFcv() && isDuplicateFrame(frame)) {
-            sendSingleCharFrame(Iec101Frame.ACK);
+        logger.debug("Received variable frame from link {}, ASDU type: {}", 
+                    frame.getLinkAddress(), 
+                    frame.getAsdu() != null ? frame.getAsdu().getTypeIdentification() : "null");
+        
+        // Check for duplicate frame ONLY if Frame count valid is set, and this is from primary station
+        if (frame.getFcv() && frame.getPrm() && isDuplicateVariableFrame(frame)) {
+            logger.info("Duplicate variable frame detected - will not process");
             return;
         }
         
         if (frame.getAsdu() != null) {
             sendSingleCharFrame(Iec101Frame.ACK);
             handleAsdu(frame.getAsdu());
+        } else {
+            logger.warn("Variable frame has no ASDU");
+            sendSingleCharFrame(Iec101Frame.ACK);
+        }
+        
+        if (frame.getFcv() && frame.getPrm()) {
+            updateFcbAfterConfirmation(frame.getLinkAddress(), frame.getFcb());
         }
     }
-
-    private boolean isDuplicateFrame(Iec101VariableFrame frame) {
-        int remoteLinkAddress = frame.getLinkAddress();
-        Boolean lastReceivedFcb = expectedFcbPerLink.get(remoteLinkAddress);
+    
+    private boolean isDuplicateVariableFrame(Iec101VariableFrame frame) {
+        int linkAddr = frame.getLinkAddress();
+        Boolean lastConfirmedFcb = lastConfirmedFcbPerLink.get(linkAddr);
         
-        if (lastReceivedFcb != null && frame.getFcb() == lastReceivedFcb) {
+        if (lastConfirmedFcb != null && frame.getFcb() == lastConfirmedFcb) {
+            logger.debug("Variable frame has same FCB as last confirmed frame - may be retransmission");
             return true;
         }
-        
-        expectedFcbPerLink.put(remoteLinkAddress, frame.getFcb());
         return false;
     }
+    
 
     private void handleAsdu(ASdu asdu) {
-        logger.info("Received ASDU: {}", asdu);
         if (eventListener != null) {
             eventListener.onAsduReceived(asdu);
         }
@@ -245,11 +291,11 @@ public class Iec101ServerConnection extends IEC60870Connection {
 
     private void handleResetRemoteLink(Iec101FixedFrame frame) {
         int remoteLinkAddress = frame.getLinkAddress();
-        expectedFcbPerLink.remove(remoteLinkAddress);
+        lastConfirmedFcbPerLink.remove(remoteLinkAddress);
         sendSingleCharFrame(Iec101Frame.ACK);
         linkLayerActive.set(true);
 
-        logger.info("Remote link reset processed for address {}", remoteLinkAddress);
+        logger.info("Remote link reset processed for address {} - FCB tracking cleared", remoteLinkAddress);
         
         if (eventListener != null && !dataTransferStarted.get()) {
             dataTransferStarted.set(true);
@@ -259,6 +305,54 @@ public class Iec101ServerConnection extends IEC60870Connection {
 
     private void handleLinkStatusRequest() {
             sendLinkStatus();
+    }
+    
+    private void handleClass1DataRequest() {
+        ASdu pendingResponse = pendingClass1Responses.poll();
+        if (pendingResponse != null) {
+            logger.debug("Sending Class 1 response: {} (COT: {})", 
+                        pendingResponse.getTypeIdentification(),
+                        pendingResponse.getCauseOfTransmission());
+            try {
+                send(pendingResponse);
+            } catch (IOException e) {
+                logger.error("Failed to send Class 1 response: {}", e.getMessage());
+                sendRespNackNoData();
+            }
+        } else {
+            sendRespNackNoData();
+        }
+    }
+    
+    private void handleClass2DataRequest() {
+        ASdu pendingResponse = pendingClass2Responses.poll();
+        if (pendingResponse != null) {
+            logger.debug("Sending Class 2 response: {} (COT: {})", 
+                        pendingResponse.getTypeIdentification(),
+                        pendingResponse.getCauseOfTransmission());
+            try {
+                send(pendingResponse);
+            } catch (IOException e) {
+                logger.error("Failed to send Class 2 response: {}", e.getMessage());
+                sendRespNackNoData();
+            }
+        } else {
+            sendRespNackNoData();
+        }
+    }
+    
+    public void queueClass1Response(ASdu response) {
+        pendingClass1Responses.offer(response);
+        logger.debug("Queued Class 1 response: {} (COT: {})", 
+                    response.getTypeIdentification(), 
+                    response.getCauseOfTransmission());
+    }
+    
+    public void queueClass2Response(ASdu response) {
+        pendingClass2Responses.offer(response);
+        logger.debug("Queued Class 2 response: {} (COT: {})", 
+                    response.getTypeIdentification(), 
+                    response.getCauseOfTransmission());
     }
 
 

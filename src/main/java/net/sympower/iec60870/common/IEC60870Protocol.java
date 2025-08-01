@@ -593,7 +593,8 @@ public final class IEC60870Protocol {
     public static ASdu createConfirmation(ASdu originalAsdu, int originatorAddress) {
         return new ASdu(originalAsdu.getTypeIdentification(), originalAsdu.isSequenceOfElements(),
                        CauseOfTransmission.ACTIVATION_CON, originalAsdu.isTestFrame(), 
-                       originalAsdu.isNegativeConfirm(), originatorAddress, 
+                       false, // Always positive confirmation for successful activation
+                       originatorAddress, 
                        originalAsdu.getCommonAddress(), originalAsdu.getInformationObjects());
     }
     

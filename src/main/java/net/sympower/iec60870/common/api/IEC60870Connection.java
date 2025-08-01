@@ -107,11 +107,11 @@ public abstract class IEC60870Connection {
 
     
     public void sendConfirmation(ASdu asdu) throws IOException {
-        send(IEC60870Protocol.createConfirmation(asdu, originatorAddress));
+        send(IEC60870Protocol.createConfirmation(asdu, asdu.getOriginatorAddress()));
     }
     
     public void sendTermination(ASdu asdu) throws IOException {
-        send(IEC60870Protocol.createTermination(asdu, originatorAddress));
+        send(IEC60870Protocol.createTermination(asdu, asdu.getOriginatorAddress()));
     }
 
     protected abstract void performClose() throws IOException;
